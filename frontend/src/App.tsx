@@ -362,7 +362,7 @@ export default function App() {
 
           <div className="email-block">
             <label className="lbl">
-              HTML (visual / rico — pode colar no Outlook em modo HTML)
+              HTML
             </label>
             <textarea
               className="textarea-out"
@@ -374,9 +374,6 @@ export default function App() {
         </div>
 
         <p className="hint footnote">
-          Rótulos: “Porto com mais/menos operações”. Período múltiplo suportado
-          (ex: ago/2025 + set/2025). O HTML inclui blocos tipo lista e gráficos
-          embutidos.
         </p>
       </section>
     </div>

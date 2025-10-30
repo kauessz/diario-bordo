@@ -1,11 +1,11 @@
-// frontend/src/api.ts
+// frontend/src/lib/api.ts
 
-const API_BASE = "http://localhost:8000/api";
+import { API_BASE } from "../config";
 
 export type UploadResult = {
   status: string;
-  periods: string[];        // ["2025-07","2025-08",...]
-  embarcadores: string[];   // ["AMAZONIA ...", ...]
+  periods: string[];        // ["2025-07","2025-08", ...]
+  embarcadores: string[];   // ["AMBEV", "AMAZONIA...", ...]
 };
 
 export type SummaryKpis = {
@@ -20,17 +20,17 @@ export type SummaryKpis = {
 export type EmailTemplate = {
   status: string;
   email: string;        // texto pronto pra copiar/colar
-  email_html: string;   // html rico (lista, negrito, etc)
-  conclusao?: string;   // IA / próximos passos
+  email_html: string;   // html rico
+  conclusao?: string;   // conclusões / próximos passos
 };
 
 export type EmlFileResp = {
   status: string;
   filename: string;
-  file_b64: string;
+  file_b64: string;     // base64 do .eml
 };
 
-// faz upload dos 3 arquivos e retorna períodos detectados + embarcadores
+// 1. Upload das 3 planilhas
 export async function uploadFiles(
   client: string,
   bookingFile: File,
@@ -43,59 +43,73 @@ export async function uploadFiles(
   fd.append("multimodal", multiFile);
   fd.append("transportes", transpFile);
 
-  const res = await fetch(`${API_BASE}/upload`, {
+  const res = await fetch(`${API_BASE}/api/upload`, {
     method: "POST",
     body: fd,
   });
 
   if (!res.ok) {
-    throw new Error(await res.text());
+    throw new Error(`Erro upload ${res.status} - ${await res.text()}`);
   }
 
   return res.json() as Promise<UploadResult>;
 }
 
-// pede os KPIs pro(s) período(s) e embarcador selecionados
+// 2. Pede os KPIs/resumo
 export async function getSummaryBy(
   client: string,
   yms: string[],          // ["2025-08","2025-09"]
   embarcador: string
-): Promise<{ kpis: SummaryKpis }> {
-  const res = await fetch(
-    `${API_BASE}/summary?client=${encodeURIComponent(client)}&ym=${encodeURIComponent(
-      yms.join(",")
-    )}&embarcador=${encodeURIComponent(embarcador)}`
-  );
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<{ kpis: SummaryKpis }>;
+): Promise<{ kpis: SummaryKpis; debug: any }> {
+  const url = new URL(`${API_BASE}/api/summary`);
+  url.searchParams.set("client", client);
+  url.searchParams.set("ym", yms.join(","));
+  url.searchParams.set("embarcador", embarcador);
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+  });
+
+  if (!res.ok) {
+    throw new Error(`Erro summary ${res.status} - ${await res.text()}`);
+  }
+  return res.json() as Promise<{ kpis: SummaryKpis; debug: any }>;
 }
 
-// gera o corpo de e-mail (texto e html) com base na seleção
+// 3. Gera corpo de e-mail (texto e HTML)
 export async function generateEmailBy(body: {
   client: string;
-  yms: string[];        // ["2025-08","2025-09"]
+  yms: string[];
   embarcador: string;
 }): Promise<EmailTemplate> {
-  const res = await fetch(`${API_BASE}/generate-email`, {
+  const res = await fetch(`${API_BASE}/api/generate-email`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+
+  if (!res.ok) {
+    throw new Error(`Erro email ${res.status} - ${await res.text()}`);
+  }
+
   return res.json() as Promise<EmailTemplate>;
 }
 
-// gera .eml pronto pra baixar (com html e imagens inline)
+// 4. Gera arquivo .eml pra baixar
 export async function generateEmlBy(body: {
   client: string;
   yms: string[];
   embarcador: string;
 }): Promise<EmlFileResp> {
-  const res = await fetch(`${API_BASE}/generate-eml-by`, {
+  const res = await fetch(`${API_BASE}/api/generate-eml-by`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+
+  if (!res.ok) {
+    throw new Error(`Erro eml ${res.status} - ${await res.text()}`);
+  }
+
   return res.json() as Promise<EmlFileResp>;
 }
