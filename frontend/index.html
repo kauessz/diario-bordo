@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Diário Operacional — MVP</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background: #0b1220; color: #e6e6e6; }
+      .container { max-width: 1000px; margin: 0 auto; padding: 24px; }
+      .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      input, select, button, textarea { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #374151; background: #0f172a; color: #e6e6e6; }
+      button { cursor: pointer; }
+      .btn { background: #2563eb; border: none; }
+      .btn.secondary { background: #334155; }
+      .muted { color: #a1a1aa; }
+      .monospace { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; white-space: pre-wrap; }
+      .badge { display: inline-block; background:#1f2937; padding: 4px 8px; border-radius: 999px; font-size: 12px; }
+      .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+      .spacer { height: 8px; }
+      a { color: #60a5fa; }
+      .disabled { opacity: 0.5; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
