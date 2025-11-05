@@ -6,15 +6,14 @@ import {
   generateEmailBy,
   generateEmlBy,
   SummaryKpis,
+  clearDatabase, // NOVO
 } from "./lib/api";
-import "./styles.css"; // tema atualizado
+import MultiSelect from "./components/MultiSelect";
+import "./styles.css";
 
-// nome fixo de "cliente" no backend (pode mudar depois pra dropdown cliente se você quiser multi-cliente)
 const CLIENT_BUCKET = "GLOBAL";
 
-// util pra mostrar "2025-08" como "ago/2025"
 function formatYmLabel(ym: string): string {
-  // ym vem "YYYY-MM"
   const [yyyy, mm] = ym.split("-");
   const meses = [
     "jan", "fev", "mar", "abr", "mai", "jun",
@@ -25,34 +24,59 @@ function formatYmLabel(ym: string): string {
   return `${mes}/${yyyy}`;
 }
 
+// (opcional) helper para limpar estado
+function resetState(setters: {
+  setBookingFile: (f: File | null) => void;
+  setMultiFile: (f: File | null) => void;
+  setTranspFile: (f: File | null) => void;
+  setPeriodOptions: (v: string[]) => void;
+  setEmbarcadoresOptions: (v: string[]) => void;
+  setSelectedPeriods: (v: string[]) => void;
+  setSelectedEmbarcadores: (v: string[]) => void;
+  setKpis: (k: SummaryKpis | null) => void;
+  setEmailTxt: (s: string) => void;
+  setEmailHtml: (s: string) => void;
+}) {
+  const {
+    setBookingFile, setMultiFile, setTranspFile,
+    setPeriodOptions, setEmbarcadoresOptions,
+    setSelectedPeriods, setSelectedEmbarcadores,
+    setKpis, setEmailTxt, setEmailHtml
+  } = setters;
+  setBookingFile(null);
+  setMultiFile(null);
+  setTranspFile(null);
+  setPeriodOptions([]);
+  setEmbarcadoresOptions([]);
+  setSelectedPeriods([]);
+  setSelectedEmbarcadores([]);
+  setKpis(null);
+  setEmailTxt("");
+  setEmailHtml("");
+}
+
 export default function App() {
-  // arquivos selecionados pra upload
   const [bookingFile, setBookingFile] = useState<File | null>(null);
   const [multiFile, setMultiFile] = useState<File | null>(null);
   const [transpFile, setTranspFile] = useState<File | null>(null);
 
-  // depois do upload:
-  const [periodOptions, setPeriodOptions] = useState<string[]>([]); // ["2025-08","2025-09",...]
+  const [periodOptions, setPeriodOptions] = useState<string[]>([]);
   const [embarcadoresOptions, setEmbarcadoresOptions] = useState<string[]>([]);
 
-  // escolha do usuário:
   const [selectedPeriods, setSelectedPeriods] = useState<string[]>([]);
-  const [embarcador, setEmbarcador] = useState<string>("");
+  const [selectedEmbarcadores, setSelectedEmbarcadores] = useState<string[]>([]);
 
-  // KPIs / resumo
   const [kpis, setKpis] = useState<SummaryKpis | null>(null);
 
-  // texto/HTML do e-mail
   const [emailTxt, setEmailTxt] = useState("");
   const [emailHtml, setEmailHtml] = useState("");
 
-  // controla loading de botões
   const [isUploading, setIsUploading] = useState(false);
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   const [isGeneratingEmail, setIsGeneratingEmail] = useState(false);
   const [isGeneratingEml, setIsGeneratingEml] = useState(false);
+  const [isFlushing, setIsFlushing] = useState(false); // NOVO
 
-  // 1. Envia planilhas → backend devolve períodos e embarcadores detectados
   async function handleUpload() {
     if (!bookingFile || !multiFile || !transpFile) {
       alert("Envie as 3 planilhas antes de processar.");
@@ -66,10 +90,13 @@ export default function App() {
         multiFile,
         transpFile
       );
-      // resp.periods -> ["2025-07","2025-08",...]
       setPeriodOptions(resp.periods || []);
       setEmbarcadoresOptions(resp.embarcadores || []);
-      setSelectedPeriods(resp.periods || []); // opcional: já marcar todos de cara
+      setSelectedPeriods(resp.periods || []);
+      setSelectedEmbarcadores([]);
+      if (resp.skipped?.length) {
+        console.log("Deduplicação:", resp.skipped);
+      }
     } catch (err: any) {
       console.error(err);
       alert("Falha no upload/processamento: " + err.message);
@@ -78,19 +105,18 @@ export default function App() {
     }
   }
 
-  // 2. Carregar resumo (KPIs) baseado no período(s) selecionado(s) + embarcador
   async function handleResumo() {
     if (!selectedPeriods.length) {
       alert("Selecione pelo menos um período.");
       return;
     }
-    if (!embarcador) {
-      alert("Selecione o embarcador.");
+    if (!selectedEmbarcadores.length) {
+      alert("Selecione pelo menos um embarcador.");
       return;
     }
     setIsLoadingSummary(true);
     try {
-      const resp = await getSummaryBy(CLIENT_BUCKET, selectedPeriods, embarcador);
+      const resp = await getSummaryBy(CLIENT_BUCKET, selectedPeriods, selectedEmbarcadores);
       setKpis(resp.kpis);
     } catch (err: any) {
       console.error(err);
@@ -100,10 +126,9 @@ export default function App() {
     }
   }
 
-  // 3. Gerar e-mail (texto + html com gráficos)
   async function handleGenerateEmail() {
-    if (!selectedPeriods.length || !embarcador) {
-      alert("Selecione período(s) e embarcador primeiro.");
+    if (!selectedPeriods.length || !selectedEmbarcadores.length) {
+      alert("Selecione período(s) e embarcador(es) primeiro.");
       return;
     }
     setIsGeneratingEmail(true);
@@ -111,7 +136,7 @@ export default function App() {
       const resp = await generateEmailBy({
         client: CLIENT_BUCKET,
         yms: selectedPeriods,
-        embarcador,
+        embarcadores: selectedEmbarcadores,
       });
       setEmailTxt(resp.email || "");
       setEmailHtml(resp.email_html || "");
@@ -123,10 +148,9 @@ export default function App() {
     }
   }
 
-  // 4. Gerar .EML pra Outlook/Gmail Desktop
   async function handleGenerateEml() {
-    if (!selectedPeriods.length || !embarcador) {
-      alert("Selecione período(s) e embarcador primeiro.");
+    if (!selectedPeriods.length || !selectedEmbarcadores.length) {
+      alert("Selecione período(s) e embarcador(es) primeiro.");
       return;
     }
     setIsGeneratingEml(true);
@@ -134,10 +158,8 @@ export default function App() {
       const resp = await generateEmlBy({
         client: CLIENT_BUCKET,
         yms: selectedPeriods,
-        embarcador,
+        embarcadores: selectedEmbarcadores,
       });
-
-      // cria um blob .eml pra baixar
       const blob = b64ToBlob(resp.file_b64, "message/rfc822");
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -152,7 +174,29 @@ export default function App() {
     }
   }
 
-  // helper converter base64 -> Blob pra download
+  // NOVO: limpar banco (por client)
+  async function handleFlush() {
+    if (!confirm("Tem certeza que deseja limpar todos os dados do cliente atual? Esta ação não pode ser desfeita.")) {
+      return;
+    }
+    setIsFlushing(true);
+    try {
+      const resp = await clearDatabase(CLIENT_BUCKET);
+      alert(`Banco limpo (${resp.deleted} registros removidos).`);
+      resetState({
+        setBookingFile, setMultiFile, setTranspFile,
+        setPeriodOptions, setEmbarcadoresOptions,
+        setSelectedPeriods, setSelectedEmbarcadores,
+        setKpis, setEmailTxt, setEmailHtml
+      });
+    } catch (err: any) {
+      console.error(err);
+      alert("Erro ao limpar banco: " + err.message);
+    } finally {
+      setIsFlushing(false);
+    }
+  }
+
   function b64ToBlob(b64Data: string, contentType: string) {
     const byteChars = atob(b64Data);
     const byteNums = new Array(byteChars.length);
@@ -163,20 +207,32 @@ export default function App() {
     return new Blob([byteArray], { type: contentType });
   }
 
-  // liga/desliga checkbox de período
   function togglePeriod(ym: string) {
     setSelectedPeriods((prev) =>
-      prev.includes(ym)
-        ? prev.filter((p) => p !== ym)
-        : [...prev, ym]
+      prev.includes(ym) ? prev.filter((p) => p !== ym) : [...prev, ym]
     );
+  }
+
+  function selectAllPeriods() {
+    setSelectedPeriods(periodOptions);
+  }
+
+  function deselectAllPeriods() {
+    setSelectedPeriods([]);
+  }
+
+  function formatKpiValue(value: any): string {
+    if (value === null || value === undefined || value === "" || (typeof value === 'number' && isNaN(value))) {
+      return "Sem evidência";
+    }
+    return String(value);
   }
 
   return (
     <div className="page-wrap">
-      <h1 className="page-title">Diário Operacional — MVP</h1>
+      <h1 className="page-title">Diário Operacional – MVP v2</h1>
       <p className="page-sub">
-        Upload das 3 planilhas (.xlsx) → períodos/embarcador → KPIs → E-mail
+        Upload das 3 planilhas (.xlsx) → períodos/embarcadores → KPIs → E-mail com gráficos detalhados
       </p>
 
       {/* BLOCO 1: Upload & Preparação */}
@@ -218,7 +274,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="form-row">
+        <div className="form-row" style={{ gap: 12, flexWrap: "wrap" }}>
           <button
             className="btn-primary"
             disabled={isUploading || !bookingFile || !multiFile || !transpFile}
@@ -226,14 +282,32 @@ export default function App() {
           >
             {isUploading ? "Processando..." : "Enviar planilhas"}
           </button>
+
+          {/* NOVO: Limpar banco */}
+          <button
+            className="btn-danger"
+            onClick={handleFlush}
+            disabled={isFlushing}
+            title="Remove todos os registros do cliente atual"
+          >
+            {isFlushing ? "Limpando..." : "Limpar banco (cliente)"}
+          </button>
         </div>
 
-        {/* depois do upload bem-sucedido */}
         {periodOptions.length > 0 && (
           <div className="after-upload-grid">
             <div className="after-upload-col">
               <label className="lbl">Período(s) disponíveis</label>
               <p className="hint">Selecione um ou mais meses:</p>
+
+              <div className="selection-controls">
+                <button className="btn-mini" onClick={selectAllPeriods}>
+                  Selecionar todos
+                </button>
+                <button className="btn-mini" onClick={deselectAllPeriods}>
+                  Limpar seleção
+                </button>
+              </div>
 
               <div className="period-grid">
                 {periodOptions.map((ym) => (
@@ -250,29 +324,23 @@ export default function App() {
             </div>
 
             <div className="after-upload-col">
-              <label className="lbl">Embarcador</label>
-              <p className="hint">Carregado a partir do Detalhamento Booking (coluna NOME_FANTASIA / cliente).</p>
-              <select
-                className="input-select"
-                value={embarcador}
-                onChange={(e) => setEmbarcador(e.target.value)}
-              >
-                <option value="">— selecione —</option>
-                {embarcadoresOptions.map((emb) => (
-                  <option key={emb} value={emb}>
-                    {emb}
-                  </option>
-                ))}
-              </select>
+              <MultiSelect
+                label="Embarcador(es)"
+                options={embarcadoresOptions}
+                selected={selectedEmbarcadores}
+                onChange={setSelectedEmbarcadores}
+                placeholder="Selecione os clientes..."
+              />
 
               <button
                 className="btn-secondary"
                 disabled={
                   isLoadingSummary ||
                   !selectedPeriods.length ||
-                  !embarcador
+                  !selectedEmbarcadores.length
                 }
                 onClick={handleResumo}
+                style={{ marginTop: "16px" }}
               >
                 {isLoadingSummary ? "Carregando..." : "Carregar Resumo"}
               </button>
@@ -289,38 +357,38 @@ export default function App() {
           <div className="kpi-grid">
             <div className="kpi-card">
               <div className="kpi-label">Total operações</div>
-              <div className="kpi-value">{kpis.total_ops ?? "—"}</div>
+              <div className="kpi-value">{formatKpiValue(kpis.total_ops)}</div>
             </div>
 
             <div className="kpi-card">
               <div className="kpi-label">Porto com mais operações</div>
-              <div className="kpi-value">{kpis.porto_top || "—"}</div>
+              <div className="kpi-value">{formatKpiValue(kpis.porto_top)}</div>
             </div>
 
             <div className="kpi-card">
               <div className="kpi-label">Porto com menos operações</div>
-              <div className="kpi-value">{kpis.porto_low || "—"}</div>
+              <div className="kpi-value">{formatKpiValue(kpis.porto_low)}</div>
             </div>
 
             <div className="kpi-card">
               <div className="kpi-label">Atrasos Coleta</div>
-              <div className="kpi-value">{kpis.atrasos_coleta ?? "—"}</div>
+              <div className="kpi-value">{formatKpiValue(kpis.atrasos_coleta)}</div>
             </div>
 
             <div className="kpi-card">
               <div className="kpi-label">Atrasos Entrega</div>
-              <div className="kpi-value">{kpis.atrasos_entrega ?? "—"}</div>
+              <div className="kpi-value">{formatKpiValue(kpis.atrasos_entrega)}</div>
             </div>
 
             <div className="kpi-card">
               <div className="kpi-label">Reagendamentos (Mercosul)</div>
-              <div className="kpi-value">{kpis.reagendamentos ?? "—"}</div>
+              <div className="kpi-value">{formatKpiValue(kpis.reagendamentos)}</div>
             </div>
           </div>
         ) : (
           <p className="hint">
             KPIs não carregados ainda. Faça upload, selecione período(s) e
-            embarcador e clique em "Carregar Resumo".
+            embarcador(es) e clique em "Carregar Resumo".
           </p>
         )}
       </section>
@@ -361,9 +429,7 @@ export default function App() {
           </div>
 
           <div className="email-block">
-            <label className="lbl">
-              HTML
-            </label>
+            <label className="lbl">HTML (preview)</label>
             <textarea
               className="textarea-out"
               value={emailHtml}
@@ -373,8 +439,15 @@ export default function App() {
           </div>
         </div>
 
-        <p className="hint footnote">
-        </p>
+        {emailHtml && (
+          <div className="email-preview">
+            <h3 className="lbl">Preview do E-mail</h3>
+            <div
+              className="preview-container"
+              dangerouslySetInnerHTML={{ __html: emailHtml }}
+            />
+          </div>
+        )}
       </section>
     </div>
   );
