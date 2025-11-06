@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import io
 import os
 import base64
@@ -30,6 +31,8 @@ import google.generativeai as genai
 # Cache simples em memória (TTL 30 minutos)
 from cachetools import TTLCache
 cache = TTLCache(maxsize=100, ttl=1800)  # 30 minutos
+
+
 
 # =============================================================================
 # .ENV + CONFIG
