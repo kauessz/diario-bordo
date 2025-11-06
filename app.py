@@ -37,27 +37,45 @@ cache = TTLCache(maxsize=100, ttl=1800)  # 30 minutos
 # =============================================================================
 # .ENV + CONFIG
 # =============================================================================
-# .ENV + CONFIG
 load_dotenv()
 
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+import socket
 
-def _force_supabase_pooler(url: str) -> str:
+def _prepare_supabase_url(url: str) -> str:
     """
-    Se a URL apontar para Supabase em :5432, troca para o Session Pooler :6543
-    e garante sslmode=require. Útil em hosts IPv4-only (ex.: Railway).
+    Força uso do Session Pooler (6543) e de IPv4 quando possível (adicionando hostaddr=A.B.C.D)
+    e garante sslmode=require para TLS. Mantém SNI e validação usando 'host' enquanto o TCP
+    usa 'hostaddr'.
     """
     try:
         u = urlparse(url)
-        if u.hostname and "supabase.co" in u.hostname and (u.port in (5432, None)):
-            # monta netloc com porta 6543
+        if not u.scheme.startswith("postgres"):
+            return url
+        if u.hostname and "supabase.co" in u.hostname:
+            # se porta ausente ou 5432, troca para 6543 (pooler)
+            port = u.port or 5432
+            if port == 5432:
+                port = 6543
+
             userinfo = ""
             if u.username and u.password:
                 userinfo = f"{u.username}:{u.password}@"
-            netloc = f"{userinfo}{u.hostname}:6543"
+            netloc = f"{userinfo}{u.hostname}:{port}"
 
+            # query params
             q = dict(parse_qsl(u.query))
             q.setdefault("sslmode", "require")
+            q.setdefault("connect_timeout", "10")
+
+            # tentar resolver A (IPv4) e inserir hostaddr
+            try:
+                infos = socket.getaddrinfo(u.hostname, port, socket.AF_INET, socket.SOCK_STREAM)
+                if infos:
+                    ipv4 = infos[0][4][0]
+                    q.setdefault("hostaddr", ipv4)
+            except Exception:
+                pass
 
             return urlunparse((u.scheme, netloc, u.path, u.params, urlencode(q), u.fragment))
     except Exception:
@@ -65,9 +83,20 @@ def _force_supabase_pooler(url: str) -> str:
     return url
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL", "postgresql://user:pass@host:5432/dbname")
-# Em ambientes IPv4-only (Railway), forçamos Pooler por padrão
-if os.getenv("FORCE_PGBOUNCER", "1") == "1":
-    SUPABASE_DB_URL = _force_supabase_pooler(SUPABASE_DB_URL)
+SUPABASE_DB_URL = _prepare_supabase_url(SUPABASE_DB_URL)
+
+
+# Debug simples (sem vazar senha):
+try:
+    _u = urlparse(SUPABASE_DB_URL)
+    from urllib.parse import parse_qsl
+    _q = dict(parse_qsl(_u.query))
+    _host = _u.hostname
+    _port = _u.port
+    _has_hostaddr = 'hostaddr' in _q
+    print(f"[DB] Using host={_host} port={_port} sslmode={_q.get('sslmode')} hostaddr={'yes' if _has_hostaddr else 'no'}")
+except Exception:
+    pass
 
 engine: Engine = create_engine(
     SUPABASE_DB_URL,
@@ -76,7 +105,28 @@ engine: Engine = create_engine(
     pool_size=5,
     max_overflow=10,
 )
+app = FastAPI()
 
+origins_env = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173,http://127.0.0.1:5173")
+origin_list = [o.strip() for o in origins_env.split(",") if o.strip()]
+origin_regex = os.getenv("FRONTEND_ORIGIN_REGEX", "")
+
+if origin_regex:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=origin_regex,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origin_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # =============================================================================
 # DB SCHEMA
