@@ -37,40 +37,46 @@ cache = TTLCache(maxsize=100, ttl=1800)  # 30 minutos
 # =============================================================================
 # .ENV + CONFIG
 # =============================================================================
+# .ENV + CONFIG
 load_dotenv()
 
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+
+def _force_supabase_pooler(url: str) -> str:
+    """
+    Se a URL apontar para Supabase em :5432, troca para o Session Pooler :6543
+    e garante sslmode=require. Útil em hosts IPv4-only (ex.: Railway).
+    """
+    try:
+        u = urlparse(url)
+        if u.hostname and "supabase.co" in u.hostname and (u.port in (5432, None)):
+            # monta netloc com porta 6543
+            userinfo = ""
+            if u.username and u.password:
+                userinfo = f"{u.username}:{u.password}@"
+            netloc = f"{userinfo}{u.hostname}:6543"
+
+            q = dict(parse_qsl(u.query))
+            q.setdefault("sslmode", "require")
+
+            return urlunparse((u.scheme, netloc, u.path, u.params, urlencode(q), u.fragment))
+    except Exception:
+        pass
+    return url
+
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL", "postgresql://user:pass@host:5432/dbname")
-engine: Engine = create_engine(SUPABASE_DB_URL, future=True, pool_pre_ping=True, pool_size=5, max_overflow=10)
+# Em ambientes IPv4-only (Railway), forçamos Pooler por padrão
+if os.getenv("FORCE_PGBOUNCER", "1") == "1":
+    SUPABASE_DB_URL = _force_supabase_pooler(SUPABASE_DB_URL)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel("gemini-pro")
-else:
-    gemini_model = None
+engine: Engine = create_engine(
+    SUPABASE_DB_URL,
+    future=True,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+)
 
-app = FastAPI()
-
-origins_env = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173,http://127.0.0.1:5173")
-origin_list = [o.strip() for o in origins_env.split(",") if o.strip()]
-origin_regex = os.getenv("FRONTEND_ORIGIN_REGEX", "")
-
-if origin_regex:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=origin_regex,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origin_list,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
 # =============================================================================
 # DB SCHEMA
