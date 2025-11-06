@@ -9,6 +9,7 @@
 .env.staging
 .env.development
 .env.test
+.rar
 
 # Padrões gerais de .env
 *.env.local
