@@ -13,32 +13,20 @@ export type SummaryKpis = {
  * Prioridade: VITE_API_BASE > window.location (produção) > localhost (dev)
  */
 function resolveApiBase(): string {
-  // 1. Variável de ambiente tem prioridade
   const fromEnv = (import.meta as any)?.env?.VITE_API_BASE;
   if (fromEnv && String(fromEnv).trim()) {
-    return String(fromEnv).trim();
+    return String(fromEnv).trim().replace(/\/$/, '');
   }
-
+  // fallback só para dev local
   if (typeof window !== "undefined") {
-    const { protocol, hostname, port } = window.location;
-    
-    // 2. Detectar ambiente de desenvolvimento
+    const { hostname, port } = window.location;
     const isDev = port === "5173" || port === "5174" || port === "3000" || hostname === "localhost";
-    
-    if (isDev) {
-      // Em dev, usa localhost:8000
-      return "http://127.0.0.1:8000";
-    }
-    
-    // 3. Em produção, usa o mesmo domínio/protocolo
-    // Exemplo: se frontend está em https://app.netlify.com, tenta https://app.netlify.com/api
-    // Mas isso geralmente não funciona, então assuma que VITE_API_BASE está configurado
-    return `${protocol}//${hostname}`;
+    if (isDev) return "http://127.0.0.1:8000";
   }
-  
-  // Fallback final
-  return "http://127.0.0.1:8000";
+  // produção SEM env? força Fly (evita chamar Netlify)
+  return "https://diario-bordo-api-kaue.fly.dev";
 }
+
 
 const API_BASE = resolveApiBase();
 
