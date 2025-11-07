@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.log
+.env
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Node / misc
+node_modules/
+npm-debug.log
+yarn.lock
+pnpm-lock.yaml
+
+# VCS
+.git/
+.gitignore
+.gitattributes

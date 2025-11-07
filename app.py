@@ -107,6 +107,10 @@ engine: Engine = create_engine(
 )
 app = FastAPI()
 
+@app.get("/api/health", include_in_schema=False)
+def health():
+    return {"ok": True}
+
 origins_env = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173,http://127.0.0.1:5173")
 origin_list = [o.strip() for o in origins_env.split(",") if o.strip()]
 origin_regex = os.getenv("FRONTEND_ORIGIN_REGEX", "")
