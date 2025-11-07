@@ -1,4 +1,4 @@
-// frontend/src/App.tsx
+// frontend/src/App.tsx - CORRIGIDO: Inputs dentro dos labels
 import React, { useState } from "react";
 import {
   uploadFiles,
@@ -6,7 +6,7 @@ import {
   generateEmailBy,
   generateEmlBy,
   SummaryKpis,
-  clearDatabase, // NOVO
+  clearDatabase,
 } from "./lib/api";
 import MultiSelect from "./components/MultiSelect";
 import "./styles.css";
@@ -24,7 +24,6 @@ function formatYmLabel(ym: string): string {
   return `${mes}/${yyyy}`;
 }
 
-// (opcional) helper para limpar estado
 function resetState(setters: {
   setBookingFile: (f: File | null) => void;
   setMultiFile: (f: File | null) => void;
@@ -75,14 +74,21 @@ export default function App() {
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   const [isGeneratingEmail, setIsGeneratingEmail] = useState(false);
   const [isGeneratingEml, setIsGeneratingEml] = useState(false);
-  const [isFlushing, setIsFlushing] = useState(false); // NOVO
+  const [isFlushing, setIsFlushing] = useState(false);
+
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   async function handleUpload() {
     if (!bookingFile || !multiFile || !transpFile) {
-      alert("Envie as 3 planilhas antes de processar.");
+      setErrorMessage("Envie as 3 planilhas antes de processar.");
       return;
     }
     setIsUploading(true);
+    setErrorMessage(null);
+    setUploadProgress("Enviando arquivos...");
+    
     try {
       const resp = await uploadFiles(
         CLIENT_BUCKET,
@@ -94,12 +100,17 @@ export default function App() {
       setEmbarcadoresOptions(resp.embarcadores || []);
       setSelectedPeriods(resp.periods || []);
       setSelectedEmbarcadores([]);
+      
+      setSuccessMessage(`✅ Arquivos processados com sucesso! ${resp.periods?.length || 0} período(s) encontrado(s).`);
+      setUploadProgress(null);
+      
       if (resp.skipped?.length) {
         console.log("Deduplicação:", resp.skipped);
       }
     } catch (err: any) {
       console.error(err);
-      alert("Falha no upload/processamento: " + err.message);
+      setErrorMessage(`❌ Falha no upload: ${err.message}`);
+      setUploadProgress(null);
     } finally {
       setIsUploading(false);
     }
@@ -107,20 +118,23 @@ export default function App() {
 
   async function handleResumo() {
     if (!selectedPeriods.length) {
-      alert("Selecione pelo menos um período.");
+      setErrorMessage("Selecione pelo menos um período.");
       return;
     }
     if (!selectedEmbarcadores.length) {
-      alert("Selecione pelo menos um embarcador.");
+      setErrorMessage("Selecione pelo menos um embarcador.");
       return;
     }
     setIsLoadingSummary(true);
+    setErrorMessage(null);
+    
     try {
       const resp = await getSummaryBy(CLIENT_BUCKET, selectedPeriods, selectedEmbarcadores);
       setKpis(resp.kpis);
+      setSuccessMessage("✅ Resumo carregado com sucesso!");
     } catch (err: any) {
       console.error(err);
-      alert("Erro ao carregar resumo: " + err.message);
+      setErrorMessage(`❌ Erro ao carregar resumo: ${err.message}`);
     } finally {
       setIsLoadingSummary(false);
     }
@@ -128,10 +142,12 @@ export default function App() {
 
   async function handleGenerateEmail() {
     if (!selectedPeriods.length || !selectedEmbarcadores.length) {
-      alert("Selecione período(s) e embarcador(es) primeiro.");
+      setErrorMessage("Selecione período(s) e embarcador(es) primeiro.");
       return;
     }
     setIsGeneratingEmail(true);
+    setErrorMessage(null);
+    
     try {
       const resp = await generateEmailBy({
         client: CLIENT_BUCKET,
@@ -140,9 +156,10 @@ export default function App() {
       });
       setEmailTxt(resp.email || "");
       setEmailHtml(resp.email_html || "");
+      setSuccessMessage("✅ E-mail gerado com análise de IA!");
     } catch (err: any) {
       console.error(err);
-      alert("Erro ao gerar e-mail: " + err.message);
+      setErrorMessage(`❌ Erro ao gerar e-mail: ${err.message}`);
     } finally {
       setIsGeneratingEmail(false);
     }
@@ -150,10 +167,12 @@ export default function App() {
 
   async function handleGenerateEml() {
     if (!selectedPeriods.length || !selectedEmbarcadores.length) {
-      alert("Selecione período(s) e embarcador(es) primeiro.");
+      setErrorMessage("Selecione período(s) e embarcador(es) primeiro.");
       return;
     }
     setIsGeneratingEml(true);
+    setErrorMessage(null);
+    
     try {
       const resp = await generateEmlBy({
         client: CLIENT_BUCKET,
@@ -166,23 +185,25 @@ export default function App() {
       a.download = resp.filename || "diario_operacional.eml";
       a.click();
       URL.revokeObjectURL(a.href);
+      setSuccessMessage("✅ Arquivo .EML baixado com sucesso!");
     } catch (err: any) {
       console.error(err);
-      alert("Erro ao gerar EML: " + err.message);
+      setErrorMessage(`❌ Erro ao gerar EML: ${err.message}`);
     } finally {
       setIsGeneratingEml(false);
     }
   }
 
-  // NOVO: limpar banco (por client)
   async function handleFlush() {
-    if (!confirm("Tem certeza que deseja limpar todos os dados do cliente atual? Esta ação não pode ser desfeita.")) {
+    if (!confirm("⚠️ Tem certeza que deseja limpar todos os dados do cliente atual? Esta ação não pode ser desfeita.")) {
       return;
     }
     setIsFlushing(true);
+    setErrorMessage(null);
+    
     try {
       const resp = await clearDatabase(CLIENT_BUCKET);
-      alert(`Banco limpo (${resp.deleted} registros removidos).`);
+      setSuccessMessage(`✅ Banco limpo (${resp.deleted} registros removidos).`);
       resetState({
         setBookingFile, setMultiFile, setTranspFile,
         setPeriodOptions, setEmbarcadoresOptions,
@@ -191,7 +212,7 @@ export default function App() {
       });
     } catch (err: any) {
       console.error(err);
-      alert("Erro ao limpar banco: " + err.message);
+      setErrorMessage(`❌ Erro ao limpar banco: ${err.message}`);
     } finally {
       setIsFlushing(false);
     }
@@ -230,83 +251,162 @@ export default function App() {
 
   return (
     <div className="page-wrap">
-      <h1 className="page-title">Diário Operacional – MVP v2</h1>
-      <p className="page-sub">
-        Upload das 3 planilhas (.xlsx) → períodos/embarcadores → KPIs → E-mail com gráficos detalhados
-      </p>
+      {/* Header */}
+      <div className="page-header">
+        <div className="header-content">
+          <div className="header-icon">📊</div>
+          <div>
+            <h1 className="page-title">Diário Operacional</h1>
+            <p className="page-version">MVP v2.0 • Powered by AI</p>
+          </div>
+        </div>
+        <p className="page-sub">
+          Sistema integrado de análise operacional com insights gerados por inteligência artificial
+        </p>
+      </div>
 
-      {/* BLOCO 1: Upload & Preparação */}
+      {/* Alertas */}
+      {errorMessage && (
+        <div className="alert alert-error">
+          <span className="alert-icon">⚠️</span>
+          <span>{errorMessage}</span>
+          <button className="alert-close" onClick={() => setErrorMessage(null)}>×</button>
+        </div>
+      )}
+
+      {successMessage && (
+        <div className="alert alert-success">
+          <span className="alert-icon">✓</span>
+          <span>{successMessage}</span>
+          <button className="alert-close" onClick={() => setSuccessMessage(null)}>×</button>
+        </div>
+      )}
+
+      {uploadProgress && (
+        <div className="progress-bar">
+          <div className="progress-fill"></div>
+          <span className="progress-text">{uploadProgress}</span>
+        </div>
+      )}
+
+      {/* BLOCO 1: Upload */}
       <section className="card-block">
-        <h2 className="card-title">1. Upload & Preparação</h2>
+        <div className="card-header">
+          <h2 className="card-title">
+            <span className="card-number">1</span>
+            Upload & Preparação
+          </h2>
+          <p className="card-subtitle">Envie as planilhas para processamento automático</p>
+        </div>
 
-        <div className="form-row">
-          <div className="form-col">
-            <label className="lbl">Detalhamento Booking (.xlsx)</label>
-            <input
-              type="file"
-              accept=".xlsx"
-              onChange={(e) => {
-                if (e.target.files?.[0]) setBookingFile(e.target.files[0]);
-              }}
-            />
+        <div className="upload-grid">
+          {/* Booking - Input DENTRO do label */}
+          <div className="upload-item">
+            <label className="upload-label" htmlFor="booking-upload">
+              <input
+                id="booking-upload"
+                type="file"
+                accept=".xlsx"
+                className="upload-input"
+                onChange={(e) => {
+                  if (e.target.files?.[0]) setBookingFile(e.target.files[0]);
+                }}
+              />
+              <span className="upload-icon">📋</span>
+              <span className="upload-text">
+                <strong>Detalhamento Booking</strong>
+                <small>.xlsx required</small>
+              </span>
+            </label>
+            {bookingFile && <div className="file-badge">✓ {bookingFile.name}</div>}
           </div>
 
-          <div className="form-col">
-            <label className="lbl">Detalhamento Multimodal (.xlsx)</label>
-            <input
-              type="file"
-              accept=".xlsx"
-              onChange={(e) => {
-                if (e.target.files?.[0]) setMultiFile(e.target.files[0]);
-              }}
-            />
+          {/* Multimodal - Input DENTRO do label */}
+          <div className="upload-item">
+            <label className="upload-label" htmlFor="multi-upload">
+              <input
+                id="multi-upload"
+                type="file"
+                accept=".xlsx"
+                className="upload-input"
+                onChange={(e) => {
+                  if (e.target.files?.[0]) setMultiFile(e.target.files[0]);
+                }}
+              />
+              <span className="upload-icon">🚛</span>
+              <span className="upload-text">
+                <strong>Detalhamento Multimodal</strong>
+                <small>.xlsx required</small>
+              </span>
+            </label>
+            {multiFile && <div className="file-badge">✓ {multiFile.name}</div>}
           </div>
 
-          <div className="form-col">
-            <label className="lbl">Programações de Transportes (.xlsx)</label>
-            <input
-              type="file"
-              accept=".xlsx"
-              onChange={(e) => {
-                if (e.target.files?.[0]) setTranspFile(e.target.files[0]);
-              }}
-            />
+          {/* Transportes - Input DENTRO do label */}
+          <div className="upload-item">
+            <label className="upload-label" htmlFor="transp-upload">
+              <input
+                id="transp-upload"
+                type="file"
+                accept=".xlsx"
+                className="upload-input"
+                onChange={(e) => {
+                  if (e.target.files?.[0]) setTranspFile(e.target.files[0]);
+                }}
+              />
+              <span className="upload-icon">📅</span>
+              <span className="upload-text">
+                <strong>Programações de Transportes</strong>
+                <small>.xlsx required</small>
+              </span>
+            </label>
+            {transpFile && <div className="file-badge">✓ {transpFile.name}</div>}
           </div>
         </div>
 
-        <div className="form-row" style={{ gap: 12, flexWrap: "wrap" }}>
+        <div className="button-group">
           <button
-            className="btn-primary"
+            className="btn btn-primary btn-large"
             disabled={isUploading || !bookingFile || !multiFile || !transpFile}
             onClick={handleUpload}
           >
-            {isUploading ? "Processando..." : "Enviar planilhas"}
+            {isUploading ? (
+              <>
+                <span className="spinner"></span> Processando...
+              </>
+            ) : (
+              <>
+                <span>▶</span> Enviar e Processar Planilhas
+              </>
+            )}
           </button>
 
-          {/* NOVO: Limpar banco */}
           <button
-            className="btn-danger"
+            className="btn btn-danger"
             onClick={handleFlush}
             disabled={isFlushing}
-            title="Remove todos os registros do cliente atual"
           >
-            {isFlushing ? "Limpando..." : "Limpar banco (cliente)"}
+            {isFlushing ? (
+              <>
+                <span className="spinner"></span> Limpando...
+              </>
+            ) : (
+              <>
+                <span>🗑️</span> Limpar Banco de Dados
+              </>
+            )}
           </button>
         </div>
 
         {periodOptions.length > 0 && (
-          <div className="after-upload-grid">
-            <div className="after-upload-col">
-              <label className="lbl">Período(s) disponíveis</label>
+          <div className="selection-panel">
+            <div className="selection-col">
+              <label className="section-label">Períodos Disponíveis</label>
               <p className="hint">Selecione um ou mais meses:</p>
 
               <div className="selection-controls">
-                <button className="btn-mini" onClick={selectAllPeriods}>
-                  Selecionar todos
-                </button>
-                <button className="btn-mini" onClick={deselectAllPeriods}>
-                  Limpar seleção
-                </button>
+                <button className="btn-mini" onClick={selectAllPeriods}>Todos</button>
+                <button className="btn-mini" onClick={deselectAllPeriods}>Limpar</button>
               </div>
 
               <div className="period-grid">
@@ -317,15 +417,15 @@ export default function App() {
                       checked={selectedPeriods.includes(ym)}
                       onChange={() => togglePeriod(ym)}
                     />
-                    <span>{formatYmLabel(ym)}</span>
+                    <span className="period-label">{formatYmLabel(ym)}</span>
                   </label>
                 ))}
               </div>
             </div>
 
-            <div className="after-upload-col">
+            <div className="selection-col">
               <MultiSelect
-                label="Embarcador(es)"
+                label="Embarcadores/Clientes"
                 options={embarcadoresOptions}
                 selected={selectedEmbarcadores}
                 onChange={setSelectedEmbarcadores}
@@ -333,122 +433,197 @@ export default function App() {
               />
 
               <button
-                className="btn-secondary"
-                disabled={
-                  isLoadingSummary ||
-                  !selectedPeriods.length ||
-                  !selectedEmbarcadores.length
-                }
+                className="btn btn-secondary btn-large"
+                disabled={isLoadingSummary || !selectedPeriods.length || !selectedEmbarcadores.length}
                 onClick={handleResumo}
-                style={{ marginTop: "16px" }}
+                style={{ marginTop: "20px" }}
               >
-                {isLoadingSummary ? "Carregando..." : "Carregar Resumo"}
+                {isLoadingSummary ? (
+                  <>
+                    <span className="spinner"></span> Carregando...
+                  </>
+                ) : (
+                  <>
+                    <span>📊</span> Carregar Resumo e KPIs
+                  </>
+                )}
               </button>
             </div>
           </div>
         )}
       </section>
 
-      {/* BLOCO 2: Resumo do período */}
+      {/* BLOCO 2: KPIs */}
       <section className="card-block">
-        <h2 className="card-title">2. Resumo do Período</h2>
+        <div className="card-header">
+          <h2 className="card-title">
+            <span className="card-number">2</span>
+            Resumo do Período
+          </h2>
+          <p className="card-subtitle">Indicadores-chave de performance</p>
+        </div>
 
         {kpis ? (
           <div className="kpi-grid">
-            <div className="kpi-card">
-              <div className="kpi-label">Total operações</div>
-              <div className="kpi-value">{formatKpiValue(kpis.total_ops)}</div>
+            <div className="kpi-card kpi-primary">
+              <div className="kpi-icon">📦</div>
+              <div className="kpi-content">
+                <div className="kpi-label">Total operações</div>
+                <div className="kpi-value">{formatKpiValue(kpis.total_ops)}</div>
+                <div className="kpi-unit">TEUs</div>
+              </div>
             </div>
 
-            <div className="kpi-card">
-              <div className="kpi-label">Porto com mais operações</div>
-              <div className="kpi-value">{formatKpiValue(kpis.porto_top)}</div>
+            <div className="kpi-card kpi-success">
+              <div className="kpi-icon">🔝</div>
+              <div className="kpi-content">
+                <div className="kpi-label">Porto TOP</div>
+                <div className="kpi-value">{formatKpiValue(kpis.porto_top)}</div>
+                <div className="kpi-unit">mais operações</div>
+              </div>
             </div>
 
-            <div className="kpi-card">
-              <div className="kpi-label">Porto com menos operações</div>
-              <div className="kpi-value">{formatKpiValue(kpis.porto_low)}</div>
+            <div className="kpi-card kpi-info">
+              <div className="kpi-icon">📉</div>
+              <div className="kpi-content">
+                <div className="kpi-label">Porto MENOR</div>
+                <div className="kpi-value">{formatKpiValue(kpis.porto_low)}</div>
+                <div className="kpi-unit">menos operações</div>
+              </div>
             </div>
 
-            <div className="kpi-card">
-              <div className="kpi-label">Atrasos Coleta</div>
-              <div className="kpi-value">{formatKpiValue(kpis.atrasos_coleta)}</div>
+            <div className="kpi-card kpi-warning">
+              <div className="kpi-icon">🚚</div>
+              <div className="kpi-content">
+                <div className="kpi-label">Atrasos Coleta</div>
+                <div className="kpi-value">{formatKpiValue(kpis.atrasos_coleta)}</div>
+                <div className="kpi-unit">ocorrências</div>
+              </div>
             </div>
 
-            <div className="kpi-card">
-              <div className="kpi-label">Atrasos Entrega</div>
-              <div className="kpi-value">{formatKpiValue(kpis.atrasos_entrega)}</div>
+            <div className="kpi-card kpi-warning">
+              <div className="kpi-icon">📦</div>
+              <div className="kpi-content">
+                <div className="kpi-label">Atrasos Entrega</div>
+                <div className="kpi-value">{formatKpiValue(kpis.atrasos_entrega)}</div>
+                <div className="kpi-unit">ocorrências</div>
+              </div>
             </div>
 
-            <div className="kpi-card">
-              <div className="kpi-label">Reagendamentos (Mercosul)</div>
-              <div className="kpi-value">{formatKpiValue(kpis.reagendamentos)}</div>
+            <div className="kpi-card kpi-danger">
+              <div className="kpi-icon">🔄</div>
+              <div className="kpi-content">
+                <div className="kpi-label">Reagendamentos</div>
+                <div className="kpi-value">{formatKpiValue(kpis.reagendamentos)}</div>
+                <div className="kpi-unit">Mercosul</div>
+              </div>
             </div>
           </div>
         ) : (
-          <p className="hint">
-            KPIs não carregados ainda. Faça upload, selecione período(s) e
-            embarcador(es) e clique em "Carregar Resumo".
-          </p>
+          <div className="empty-state">
+            <div className="empty-icon">📊</div>
+            <p className="empty-text">
+              KPIs não carregados. Faça upload e clique em "Carregar Resumo".
+            </p>
+          </div>
         )}
       </section>
 
       {/* BLOCO 3: E-mail */}
       <section className="card-block">
-        <h2 className="card-title">3. E-mail</h2>
+        <div className="card-header">
+          <h2 className="card-title">
+            <span className="card-number">3</span>
+            Geração de E-mail
+          </h2>
+          <p className="card-subtitle">Relatório com análise de IA</p>
+        </div>
 
-        <div className="form-row">
+        <div className="button-group">
           <button
-            className="btn-primary"
+            className="btn btn-primary btn-large"
             disabled={isGeneratingEmail || !kpis}
             onClick={handleGenerateEmail}
           >
-            {isGeneratingEmail
-              ? "Gerando texto..."
-              : "Gerar (texto + HTML c/ gráficos)"}
+            {isGeneratingEmail ? (
+              <>
+                <span className="spinner"></span> Gerando...
+              </>
+            ) : (
+              <>
+                <span>🤖</span> Gerar E-mail com IA
+              </>
+            )}
           </button>
 
           <button
-            className="btn-secondary"
+            className="btn btn-secondary btn-large"
             disabled={isGeneratingEml || !kpis}
             onClick={handleGenerateEml}
           >
-            {isGeneratingEml ? "Gerando .eml..." : "Baixar .EML (Outlook)"}
+            {isGeneratingEml ? (
+              <>
+                <span className="spinner"></span> Gerando .eml...
+              </>
+            ) : (
+              <>
+                <span>📧</span> Baixar .EML
+              </>
+            )}
           </button>
         </div>
 
-        <div className="email-panels">
-          <div className="email-block">
-            <label className="lbl">Texto (copiar e colar)</label>
+        <div className="email-tabs">
+          <div className="email-panel">
+            <label className="section-label">
+              <span>📝</span> Texto
+            </label>
             <textarea
               className="textarea-out"
               value={emailTxt}
               onChange={(e) => setEmailTxt(e.target.value)}
-              rows={10}
+              rows={12}
+              placeholder="Texto do e-mail..."
             />
           </div>
 
-          <div className="email-block">
-            <label className="lbl">HTML (preview)</label>
+          <div className="email-panel">
+            <label className="section-label">
+              <span>🎨</span> HTML
+            </label>
             <textarea
               className="textarea-out"
               value={emailHtml}
               onChange={(e) => setEmailHtml(e.target.value)}
-              rows={10}
+              rows={12}
+              placeholder="HTML do e-mail..."
             />
           </div>
         </div>
 
         {emailHtml && (
-          <div className="email-preview">
-            <h3 className="lbl">Preview do E-mail</h3>
-            <div
-              className="preview-container"
-              dangerouslySetInnerHTML={{ __html: emailHtml }}
-            />
+          <div className="email-preview-section">
+            <h3 className="section-label">
+              <span>👁️</span> Preview
+            </h3>
+            <div className="email-preview">
+              <div
+                className="preview-container"
+                dangerouslySetInnerHTML={{ __html: emailHtml }}
+              />
+            </div>
           </div>
         )}
       </section>
+
+      {/* Footer */}
+      <footer className="page-footer">
+        <p>
+          Sistema desenvolvido com <span className="heart">❤️</span> • 
+          Powered by <strong>Google Gemini AI</strong>
+        </p>
+        <p className="footer-version">v2.0.1 • 2024</p>
+      </footer>
     </div>
   );
 }

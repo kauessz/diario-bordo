@@ -127,6 +127,20 @@ else:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    
+
+# --- Gemini (AI) ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+gemini_model = None
+try:
+    import google.generativeai as genai  # type: ignore
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-pro")
+        gemini_model = genai.GenerativeModel(GEMINI_MODEL)
+except Exception:
+    # Mantém gemini_model=None -> o código cai no fallback sem IA
+    gemini_model = None
 
 # =============================================================================
 # DB SCHEMA

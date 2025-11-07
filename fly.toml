@@ -1,0 +1,48 @@
+# fly.toml - Configuração do Fly.io para Diário Operacional
+
+app = "diario"  # Altere para um nome único
+primary_region = "gru"  # São Paulo - GRU (ou use "mia" para Miami se preferir US)
+
+# Seção de Build
+[build]
+  dockerfile = "Dockerfile"
+
+# Variáveis de ambiente
+[env]
+  PORT = "8080"
+  FRONTEND_ORIGIN_REGEX = "https://.*\\.netlify\\.app,https://.*\\.app"
+
+# Configuração HTTP
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false  # Mantenha sempre ligado (free tier permite 1 máquina)
+  auto_start_machines = true
+  min_machines_running = 1
+  
+  # Health check endpoint
+  [http_service.checks]
+    [http_service.checks.health]
+      grace_period = "10s"
+      interval = "30s"
+      method = "GET"
+      timeout = "5s"
+      path = "/api/health"
+
+# Configuração de máquinas virtuais
+[[vm]]
+  memory = '512mb'  # Free tier: 512MB
+  cpu_kind = 'shared'
+  cpus = 1
+
+# Secrets (configure via CLI):
+# fly secrets set SUPABASE_DB_URL="postgresql://..."
+# fly secrets set GEMINI_API_KEY="..."
+# fly secrets set FRONTEND_ORIGIN="https://seu-frontend.netlify.app"
+
+# Deploy instructions:
+# 1. Install flyctl: https://fly.io/docs/hands-on/install-flyctl/
+# 2. Login: flyctl auth login
+# 3. Create app: flyctl launch
+# 4. Set secrets: flyctl secrets set SUPABASE_DB_URL="..." GEMINI_API_KEY="..."
+# 5. Deploy: flyctl deploy
