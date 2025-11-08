@@ -178,6 +178,31 @@ export async function generateEmlBy(payload: {
 }
 
 /**
+ * Buscar dados disponíveis no banco (períodos e embarcadores)
+ * Para auto-carregar ao abrir a aplicação
+ */
+export async function getAvailableData(
+  client: string
+): Promise<{ 
+  has_data: boolean; 
+  periods: string[]; 
+  embarcadores: string[];
+  error?: string;
+}> {
+  const params = new URLSearchParams();
+  params.set("client", client);
+  
+  const res = await fetchWithTimeout(
+    `${API_BASE}/api/available-data?${params.toString()}`,
+    {},
+    10000 // 10 segundos
+  );
+  
+  await ensureOk(res);
+  return res.json();
+}
+
+/**
  * Limpar banco de dados (flush)
  */
 export async function clearDatabase(

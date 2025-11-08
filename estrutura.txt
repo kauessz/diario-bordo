@@ -1,6 +1,7 @@
 Listagem de caminhos de pasta
 O n£mero de s‚rie do volume ‚ 7A5C-89E0
 C:.
+|   .dockerignore
 |   .env
 |   .env.example
 |   .gitattributes
@@ -8,7 +9,9 @@ C:.
 |   app.py
 |   data.db
 |   diario-bordo.rar
+|   Dockerfile
 |   estrutura.txt
+|   fly.toml
 |   fly_fastapi_pack.zip
 |   Procfile
 |   README.md
@@ -168,27 +171,22 @@ C:.
 |   |       +---cachetools
 |   |       |   |   func.py
 |   |       |   |   keys.py
-|   |       |   |   _cached.py
-|   |       |   |   _cachedmethod.py
 |   |       |   |   __init__.py
 |   |       |   |   
 |   |       |   \---__pycache__
 |   |       |           func.cpython-312.pyc
 |   |       |           keys.cpython-312.pyc
-|   |       |           _cached.cpython-312.pyc
-|   |       |           _cachedmethod.cpython-312.pyc
 |   |       |           __init__.cpython-312.pyc
 |   |       |           
-|   |       +---cachetools-6.2.1.dist-info
-|   |       |   |   INSTALLER
-|   |       |   |   METADATA
-|   |       |   |   RECORD
-|   |       |   |   top_level.txt
-|   |       |   |   WHEEL
-|   |       |   |   
-|   |       |   \---licenses
-|   |       |           LICENSE
-|   |       |           
+|   |       +---cachetools-5.3.3.dist-info
+|   |       |       INSTALLER
+|   |       |       LICENSE
+|   |       |       METADATA
+|   |       |       RECORD
+|   |       |       REQUESTED
+|   |       |       top_level.txt
+|   |       |       WHEEL
+|   |       |       
 |   |       +---certifi
 |   |       |   |   cacert.pem
 |   |       |   |   core.py

@@ -1,208 +1,315 @@
-# =============================================================================
-# ⚠️ IMPORTANTE: .env.example DEVE ser commitado (é apenas template)
-# =============================================================================
+# ===================================
+# .gitignore - Diário Operacional
+# Python + Node.js + Fly.io + Netlify
+# ===================================
 
-# IGNORAR (com credenciais reais)
-.env
-.env.local
-.env.production
-.env.staging
-.env.development
-.env.test
-.rar
+# ===================
+# PYTHON / BACKEND
+# ===================
 
-# Padrões gerais de .env
-*.env.local
-*.env.production
-*.env.staging
-
-# NÃO ignorar (templates sem credenciais)
-# .env.example
-# .env.template
-# .env.sample
-
-# Outros arquivos sensíveis
-.envrc
-secrets.json
-credentials.json
-*.pem
-*.key
-*.cert
-auth.json
-
-# =============================================================================
-# PYTHON
-# =============================================================================
-
-# Byte-compiled
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 
-# Virtual environments
-venv/
-env/
-ENV/
-.venv
-.virtualenv
-
-# Distribution
+# Distribution / packaging
+.Python
 build/
+develop-eggs/
 dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
+.installed.cfg
 *.egg
+MANIFEST
 
-# Testing
-.pytest_cache/
-.coverage
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
 htmlcov/
 .tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+test.db
+*.db
+*.sqlite
+*.sqlite3
 
-# mypy
-.mypy_cache/
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+*.env
+.env.*
+!.env.example
 
-# Jupyter
-.ipynb_checkpoints
+# PyCharm
+.idea/
+*.iml
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/dictionaries
+.idea/**/shelf
 
-# =============================================================================
-# NODE.JS / FRONTEND
-# =============================================================================
-
-node_modules/
-npm-debug.log
-yarn-error.log
-yarn-debug.log
-.npm
-.yarn
-
-# Build output
-dist/
-build/
-.next/
-out/
-
-# Cache
-.cache/
-.parcel-cache/
-
-# =============================================================================
-# IDEs
-# =============================================================================
-
-# VSCode
+# VS Code
 .vscode/
 *.code-workspace
 .history/
 
-# PyCharm / IntelliJ
-.idea/
-*.iml
-*.iws
+# Jupyter Notebook
+.ipynb_checkpoints
 
-# Sublime
-*.sublime-project
-*.sublime-workspace
+# pyenv
+.python-version
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# ===================
+# NODE.JS / FRONTEND
+# ===================
+
+# Dependencies
+node_modules/
+jspm_packages/
+bower_components/
+
+# Production build
+dist/
+dist-ssr/
+build/
+out/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment variables
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Cache
+.npm
+.eslintcache
+.cache/
+.parcel-cache/
+.turbo/
+
+# Next.js
+.next/
+next-env.d.ts
+
+# Nuxt.js
+.nuxt
+.output
+
+# Gatsby
+.cache/
+public/
+
+# Vite
+.vite/
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# ===================
+# EDITORS
+# ===================
 
 # Vim
 *.swp
 *.swo
 *~
+.*.sw[a-p]
 
-# =============================================================================
-# DATABASES
-# =============================================================================
+# Emacs
+*~
+\#*\#
+.\#*
 
-*.sqlite
-*.sqlite3
-*.db
-*.db-shm
-*.db-wal
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
 
-# =============================================================================
-# SISTEMA OPERACIONAL
-# =============================================================================
+# ===================
+# OS SPECIFIC
+# ===================
 
-# MacOS
+# macOS
 .DS_Store
 .AppleDouble
 .LSOverride
 ._*
+.Spotlight-V100
+.Trashes
 
 # Windows
 Thumbs.db
-Desktop.ini
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
 $RECYCLE.BIN/
 *.lnk
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
 
 # Linux
-*~
 .directory
+.Trash-*
+.nfs*
 
-# =============================================================================
-# LOGS
-# =============================================================================
-
-*.log
-logs/
-log.txt
-error.log
-access.log
-
-# =============================================================================
-# TEMPORÁRIOS E BACKUPS
-# =============================================================================
-
-*.tmp
-*.temp
-*.bak
-*.backup
-*.old
-*.orig
-
-# =============================================================================
+# ===================
 # DEPLOY / CLOUD
-# =============================================================================
+# ===================
+
+# Fly.io
+.fly/
+fly.toml.bak
+
+# Netlify
+.netlify/
+.netlify.state
+
+# Vercel
+.vercel
 
 # Railway
 .railway/
 
-# Render
-.render/
+# Docker
+docker-compose.override.yml
+.dockerignore.local
 
-# Vercel
-.vercel/
+# ===================
+# DATABASE / DATA
+# ===================
 
-# Netlify
-.netlify/
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
 
-# Heroku
-.heroku/
+# CSV/Excel uploads (se não quiser versionar)
+# uploads/*.xlsx
+# uploads/*.xls
+# uploads/*.csv
 
-# =============================================================================
-# OUTROS
-# =============================================================================
+# Logs de dados
+data/*.log
+logs/*.log
 
-# Arquivos grandes
+# ===================
+# SECURITY / SECRETS
+# ===================
+
+# Keys e certificados
+*.key
+*.pem
+*.p12
+*.pfx
+*.cer
+*.crt
+secrets/
+credentials/
+
+# Supabase
+.supabase/
+
+# ===================
+# PROJECT SPECIFIC
+# ===================
+
+# Planilhas temporárias/teste
+test_uploads/
+temp_files/
+*.tmp
+
+# Relatórios gerados
+reports/*.pdf
+reports/*.html
+outputs/*.eml
+
+# Cache do backend
+cache/
+*.cache
+
+# Logs customizados
+*.log
+logs/
+
+# Backups
+*.bak
+*.backup
+backup/
+
+# Screenshots/prints
+screenshots/
+prints/
+
+# ===================
+# MISC
+# ===================
+
+# Arquivos compactados
 *.zip
 *.tar.gz
 *.rar
+*.7z
 
-# Screenshots de teste
-screenshots/
+# Temporários
+tmp/
+temp/
+*.tmp
+*.temp
 
-# Coverage
-coverage/
-*.lcov
+# Lock files (opcional - alguns preferem versionar)
+# poetry.lock
+# Pipfile.lock
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
 
-# =============================================================================
-# PROJETO ESPECÍFICO - DIÁRIO BORDO
-# =============================================================================
-
-# Dados locais (se houver)
-data/local/
-uploads/local/
-
-# Planilhas de teste locais (descomente se necessário)
-# *_test.xlsx
-# *_local.xlsx
+# ===================
+# KEEP THESE FOLDERS
+# ===================
+!.gitkeep
+!.keep

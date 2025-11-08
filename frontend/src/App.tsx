@@ -1,5 +1,5 @@
-// frontend/src/App.tsx - CORRIGIDO: Inputs dentro dos labels
-import React, { useState } from "react";
+// frontend/src/App.tsx - CORRIGIDO: Inputs dentro dos labels + Auto-load de dados
+import React, { useState, useEffect } from "react";
 import {
   uploadFiles,
   getSummaryBy,
@@ -7,6 +7,7 @@ import {
   generateEmlBy,
   SummaryKpis,
   clearDatabase,
+  getAvailableData,
 } from "./lib/api";
 import MultiSelect from "./components/MultiSelect";
 import "./styles.css";
@@ -52,6 +53,10 @@ function resetState(setters: {
   setKpis(null);
   setEmailTxt("");
   setEmailHtml("");
+  
+  // Limpar localStorage
+  localStorage.removeItem('selectedPeriods');
+  localStorage.removeItem('selectedEmbarcadores');
 }
 
 export default function App() {
@@ -79,6 +84,67 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+
+  // 🚀 AUTO-LOAD: Carregar dados existentes ao montar o componente
+  useEffect(() => {
+    async function loadExistingData() {
+      try {
+        const data = await getAvailableData(CLIENT_BUCKET);
+        
+        if (data.has_data && data.periods.length > 0) {
+          setPeriodOptions(data.periods);
+          setEmbarcadoresOptions(data.embarcadores);
+          
+          // Recuperar seleções do localStorage se existirem
+          const savedPeriods = localStorage.getItem('selectedPeriods');
+          const savedEmbarcadores = localStorage.getItem('selectedEmbarcadores');
+          
+          if (savedPeriods) {
+            const parsed = JSON.parse(savedPeriods);
+            // Filtrar apenas períodos que ainda existem
+            const validPeriods = parsed.filter((p: string) => data.periods.includes(p));
+            if (validPeriods.length > 0) {
+              setSelectedPeriods(validPeriods);
+            }
+          }
+          
+          if (savedEmbarcadores) {
+            const parsed = JSON.parse(savedEmbarcadores);
+            // Filtrar apenas embarcadores que ainda existem
+            const validEmbs = parsed.filter((e: string) => data.embarcadores.includes(e));
+            if (validEmbs.length > 0) {
+              setSelectedEmbarcadores(validEmbs);
+            }
+          }
+          
+          console.log(`✅ Dados carregados: ${data.periods.length} período(s), ${data.embarcadores.length} embarcador(es)`);
+        } else {
+          console.log('ℹ️ Nenhum dado encontrado no banco. Faça upload das planilhas.');
+        }
+      } catch (err) {
+        console.error('Erro ao carregar dados existentes:', err);
+      } finally {
+        setIsInitialLoading(false);
+      }
+    }
+    
+    loadExistingData();
+  }, []);
+
+  // Salvar seleções no localStorage sempre que mudarem
+  useEffect(() => {
+    if (selectedPeriods.length > 0) {
+      localStorage.setItem('selectedPeriods', JSON.stringify(selectedPeriods));
+    }
+  }, [selectedPeriods]);
+
+  useEffect(() => {
+    if (selectedEmbarcadores.length > 0) {
+      localStorage.setItem('selectedEmbarcadores', JSON.stringify(selectedEmbarcadores));
+    }
+  }, [selectedEmbarcadores]);
 
   async function handleUpload() {
     if (!bookingFile || !multiFile || !transpFile) {
@@ -264,6 +330,14 @@ export default function App() {
           Sistema integrado de análise operacional com insights gerados por inteligência artificial
         </p>
       </div>
+
+      {/* Loading inicial */}
+      {isInitialLoading && (
+        <div className="alert alert-info">
+          <span className="spinner"></span>
+          <span>Carregando dados existentes...</span>
+        </div>
+      )}
 
       {/* Alertas */}
       {errorMessage && (

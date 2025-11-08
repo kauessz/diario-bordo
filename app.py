@@ -1513,6 +1513,82 @@ async def api_generate_eml_by(payload: dict):
     b64 = base64.b64encode(raw_eml).decode("ascii")
     return JSONResponse({"status": "ok", "filename": "diario_operacional.eml", "file_b64": b64})
 
+@app.get("/api/available-data")
+def api_available_data(client: str = Query(..., description="Identificador do bucket/cliente")):
+    """
+    Retorna períodos e embarcadores disponíveis no banco para o cliente.
+    Útil para auto-carregar dados ao abrir a aplicação sem precisar refazer upload.
+    """
+    if not client:
+        raise HTTPException(status_code=400, detail="Informe ?client=...")
+    
+    try:
+        with engine.begin() as conn:
+            # Buscar períodos únicos onde temos dados completos (booking, multi, transp)
+            periods_query = text("""
+                SELECT DISTINCT ym 
+                FROM uploads 
+                WHERE client = :c 
+                  AND ym IN (
+                      SELECT ym FROM uploads WHERE client = :c AND kind = 'booking'
+                      INTERSECT
+                      SELECT ym FROM uploads WHERE client = :c AND kind = 'multi'
+                      INTERSECT
+                      SELECT ym FROM uploads WHERE client = :c AND kind = 'transp'
+                  )
+                ORDER BY ym DESC
+            """)
+            periods_result = conn.execute(periods_query, {"c": client}).fetchall()
+            periods = [row[0] for row in periods_result]
+            
+            # Se não há períodos, retorna vazio
+            if not periods:
+                return JSONResponse({
+                    "status": "ok",
+                    "has_data": False,
+                    "periods": [],
+                    "embarcadores": []
+                })
+            
+            # Carregar embarcadores do período mais recente
+            latest_period = periods[0]
+            booking_blob = get_latest_blob(client, latest_period, "booking")
+            
+            if booking_blob:
+                # Parsear booking para extrair embarcadores
+                booking_sheets = parse_excel_bytes(booking_blob)
+                if booking_sheets:
+                    df_all = pd.concat(booking_sheets.values(), ignore_index=True)
+                    col_emb = ensure_col(df_all, CANDS_BOOKING_EMB)
+                    col_stat = ensure_col(df_all, CANDS_BOOKING_STAT)
+                    
+                    if col_emb:
+                        df_active = df_all[df_all[col_stat].astype(str).str.strip().str.lower() == "ativo"] if col_stat else df_all
+                        embarcadores = sorted(df_active[col_emb].astype(str).str.strip().dropna().unique().tolist())
+                    else:
+                        embarcadores = []
+                else:
+                    embarcadores = []
+            else:
+                embarcadores = []
+            
+            return JSONResponse({
+                "status": "ok",
+                "has_data": True,
+                "periods": periods,
+                "embarcadores": embarcadores
+            })
+            
+    except Exception as e:
+        print(f"[ERROR] Falha ao buscar dados disponíveis: {str(e)}")
+        return JSONResponse({
+            "status": "error",
+            "has_data": False,
+            "periods": [],
+            "embarcadores": [],
+            "error": str(e)
+        })
+
 @app.delete("/api/flush")
 def api_flush(client: str = Query(..., description="Identificador do bucket/cliente"),
               ym: Optional[str] = Query(None, description="Opcional: período YYYY-MM para limpar apenas esse mês")):
