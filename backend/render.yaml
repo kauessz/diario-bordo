@@ -1,0 +1,51 @@
+# render.yaml - Configuração para deploy no Render.com
+
+services:
+  # Backend FastAPI
+  - type: web
+    name: diario-bordo-api
+    env: python
+    region: oregon  # Mais próximo do Brasil depois de Ohio
+    plan: free
+    branch: main
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app:app --host 0.0.0.0 --port $PORT --workers 1"
+    healthCheckPath: /api/health
+    
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      
+      - key: FRONTEND_ORIGIN
+        value: http://localhost:5173,https://diario-bordo.netlify.app
+      
+      - key: FRONTEND_ORIGIN_REGEX
+        value: ^https://diario-bordo\.netlify\.app$|^https://deploy-preview-\d+--diario-bordo\.netlify\.app$
+      
+      # Otimizações de memória para plano gratuito
+      - key: PYTHONUNBUFFERED
+        value: 1
+      
+      - key: MALLOC_TRIM_THRESHOLD_
+        value: 100000
+      
+      - key: MALLOC_MMAP_THRESHOLD_
+        value: 100000
+      
+      # Database Supabase (adicionar via Render dashboard)
+      - key: SUPABASE_DB_URL
+        sync: false  # Secret - adicionar manualmente no dashboard
+      
+      # Gemini API (adicionar via Render dashboard)
+      - key: GEMINI_API_KEY
+        sync: false  # Secret - adicionar manualmente no dashboard
+      
+      - key: GEMINI_MODEL
+        value: gemini-pro
+
+# Database PostgreSQL (opcional - Render oferece grátis por 90 dias)
+# databases:
+#   - name: diario-bordo-db
+#     plan: free
+#     databaseName: diario_bordo
+#     user: diario_user

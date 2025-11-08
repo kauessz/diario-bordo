@@ -24,7 +24,7 @@ from openpyxl import Workbook
 os.environ["SUPABASE_DB_URL"] = "sqlite:///./test.db"  # Usar SQLite para testes
 
 # Importar a aplicação DEPOIS de configurar o env
-from app import app, engine
+from backend.app import app, engine
 
 
 # =============================================================================
