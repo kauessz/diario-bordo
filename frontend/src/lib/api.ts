@@ -1,4 +1,5 @@
 // frontend/src/lib/api.ts
+
 export type SummaryKpis = {
   total_ops: number | null;
   porto_top: string | null;
@@ -9,76 +10,101 @@ export type SummaryKpis = {
 };
 
 /**
- * Resolve a URL base da API de forma inteligente
- * Prioridade: VITE_API_BASE > window.location (produção) > localhost (dev)
+ * Resolve a URL base da API de forma inteligente.
+ * Prioridade:
+ *   1) window.__ENV__.API_BASE_URL (runtime, sem rebuild)
+ *   2) VITE_API_BASE
+ *   3) VITE_API_BASE_URL
+ *   4) localhost (dev)
+ *   5) fallback Koyeb (produção)
  */
 function resolveApiBase(): string {
-  const fromEnv = (import.meta as any)?.env?.VITE_API_BASE;
-  if (fromEnv && String(fromEnv).trim()) {
-    return String(fromEnv).trim().replace(/\/$/, '');
+  const runtime = (window as any)?.__ENV__?.API_BASE_URL;
+  if (runtime && String(runtime).trim()) {
+    return String(runtime).trim().replace(/\/+$/, "");
   }
+
+  const fromEnvA = (import.meta as any)?.env?.VITE_API_BASE;
+  if (fromEnvA && String(fromEnvA).trim()) {
+    return String(fromEnvA).trim().replace(/\/+$/, "");
+  }
+
+  const fromEnvB = (import.meta as any)?.env?.VITE_API_BASE_URL;
+  if (fromEnvB && String(fromEnvB).trim()) {
+    return String(fromEnvB).trim().replace(/\/+$/, "");
+  }
+
   // fallback só para dev local
   if (typeof window !== "undefined") {
     const { hostname, port } = window.location;
-    const isDev = port === "5173" || port === "5174" || port === "3000" || hostname === "localhost";
+    const isDev =
+      port === "5173" || port === "5174" || port === "3000" || hostname === "localhost";
     if (isDev) return "http://127.0.0.1:8000";
   }
-  // produção SEM env? força Fly (evita chamar Netlify)
+
+  // fallback produção (mantém seu Koyeb)
   return "https://purring-wenonah-kauessz-ef9b5835.koyeb.app";
 }
 
-
 const API_BASE = resolveApiBase();
+const DEFAULT_TIMEOUT = Number((import.meta as any)?.env?.VITE_API_TIMEOUT_MS ?? 120000);
 
 console.log(`[API Client] Base URL: ${API_BASE}`);
 
-/**
- * Helper para verificar resposta HTTP e lançar erro descritivo
- */
+/** Monta URL com segurança (sem // duplicado, sem perder query) */
+function buildUrl(path: string, query?: Record<string, string | number | boolean>) {
+  const clean = String(path || "").replace(/^\/+/, "");
+  const u = new URL(clean, API_BASE + "/");
+  if (query) {
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== null) u.searchParams.set(k, String(v));
+    }
+  }
+  return u.toString();
+}
+
+/** Helper para verificar resposta HTTP e lançar erro descritivo */
 async function ensureOk(res: Response): Promise<void> {
   if (!res.ok) {
     let errorMessage = `HTTP ${res.status} - ${res.statusText}`;
-    
     try {
-      const errorData = await res.json();
-      if (errorData.detail) {
-        errorMessage += `: ${errorData.detail}`;
+      // tenta extrair JSON {detail: "..."}
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const data = await res.json().catch(() => null);
+        if (data && (data.detail || data.error)) {
+          errorMessage += `: ${data.detail || data.error}`;
+        }
+      } else {
+        const txt = await res.text().catch(() => "");
+        if (txt) errorMessage += `: ${txt.slice(0, 300)}`;
       }
     } catch {
-      // Se não conseguir parsear JSON, usa statusText
+      /* ignore */
     }
-    
     throw new Error(errorMessage);
   }
 }
 
-/**
- * Wrapper fetch com timeout e retry
- */
+/** Wrapper fetch com timeout */
 async function fetchWithTimeout(
-  url: string, 
-  options: RequestInit = {}, 
-  timeout: number = 60000
+  url: string,
+  options: RequestInit = {},
+  timeout: number = DEFAULT_TIMEOUT
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-  
+  const timeoutId = setTimeout(() => controller.abort(new Error(`timeout:${timeout}`)), timeout);
+
   try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
+    const response = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(timeoutId);
     return response;
-  } catch (error) {
+  } catch (error: any) {
     clearTimeout(timeoutId);
-    if (error instanceof Error) {
-      if (error.name === 'AbortError') {
-        throw new Error('Request timeout - servidor demorou muito para responder');
-      }
-      throw error;
+    if (error?.name === "AbortError" || String(error?.message || "").startsWith("timeout:")) {
+      throw new Error("Request timeout - servidor demorou muito para responder");
     }
-    throw new Error('Erro desconhecido na requisição');
+    throw error instanceof Error ? error : new Error("Erro desconhecido na requisição");
   }
 }
 
@@ -90,11 +116,11 @@ export async function uploadFiles(
   bookingFile: File,
   multiFile: File,
   transpFile: File
-): Promise<{ 
-  periods: string[]; 
-  embarcadores: string[]; 
-  inserted?: any[]; 
-  skipped?: any[] 
+): Promise<{
+  periods: string[];
+  embarcadores: string[];
+  inserted?: any[];
+  skipped?: any[];
 }> {
   const form = new FormData();
   form.append("client", client);
@@ -102,12 +128,7 @@ export async function uploadFiles(
   form.append("multimodal", multiFile);
   form.append("transportes", transpFile);
 
-  const res = await fetchWithTimeout(
-    `${API_BASE}/api/upload`, 
-    { method: "POST", body: form },
-    120000 // 2 minutos de timeout para upload
-  );
-  
+  const res = await fetchWithTimeout(buildUrl("/api/upload"), { method: "POST", body: form }, 120000);
   await ensureOk(res);
   return res.json();
 }
@@ -120,15 +141,15 @@ export async function getSummaryBy(
   yms: string[],
   embarcadores: string[]
 ): Promise<{ kpis: SummaryKpis; debug: any }> {
-  const params = new URLSearchParams();
-  params.set("client", client);
-  params.set("ym", yms.join(","));
-  params.set("embarcador", embarcadores.join(","));
-  
   const res = await fetchWithTimeout(
-    `${API_BASE}/api/summary?${params.toString()}`
+    buildUrl("/api/summary", {
+      client,
+      ym: yms.join(","),
+      embarcador: embarcadores.join(","),
+    }),
+    {},
+    120000 // 120s para consultas mais pesadas
   );
-  
   await ensureOk(res);
   return res.json();
 }
@@ -142,15 +163,14 @@ export async function generateEmailBy(payload: {
   embarcadores: string[];
 }): Promise<{ email: string; email_html: string }> {
   const res = await fetchWithTimeout(
-    `${API_BASE}/api/generate-email`,
+    buildUrl("/api/generate-email"),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    90000 // 90 segundos - IA pode demorar
+    90000 // 90s - IA pode demorar
   );
-  
   await ensureOk(res);
   return res.json();
 }
@@ -164,15 +184,14 @@ export async function generateEmlBy(payload: {
   embarcadores: string[];
 }): Promise<{ filename: string; file_b64: string }> {
   const res = await fetchWithTimeout(
-    `${API_BASE}/api/generate-eml-by`,
+    buildUrl("/api/generate-eml-by"),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    90000 // 90 segundos
+    90000 // 90s
   );
-  
   await ensureOk(res);
   return res.json();
 }
@@ -183,21 +202,17 @@ export async function generateEmlBy(payload: {
  */
 export async function getAvailableData(
   client: string
-): Promise<{ 
-  has_data: boolean; 
-  periods: string[]; 
+): Promise<{
+  has_data: boolean;
+  periods: string[];
   embarcadores: string[];
   error?: string;
 }> {
-  const params = new URLSearchParams();
-  params.set("client", client);
-  
   const res = await fetchWithTimeout(
-    `${API_BASE}/api/available-data?${params.toString()}`,
+    buildUrl("/api/available-data", { client }),
     {},
-    10000 // 10 segundos
+    30000 // 30s (antes era 10s e podia estourar)
   );
-  
   await ensureOk(res);
   return res.json();
 }
@@ -209,15 +224,10 @@ export async function clearDatabase(
   client: string,
   ym?: string
 ): Promise<{ status: string; deleted: number; detail: any }> {
-  const params = new URLSearchParams();
-  params.set("client", client);
-  if (ym) params.set("ym", ym);
-  
   const res = await fetchWithTimeout(
-    `${API_BASE}/api/flush?${params.toString()}`, 
+    buildUrl("/api/flush", { client, ...(ym ? { ym } : {}) }),
     { method: "DELETE" }
   );
-  
   await ensureOk(res);
   return res.json();
 }
@@ -227,15 +237,8 @@ export async function clearDatabase(
  */
 export async function healthCheck(): Promise<{ ok: boolean; cache_size?: number }> {
   try {
-    const res = await fetchWithTimeout(
-      `${API_BASE}/api/health`,
-      {},
-      5000 // 5 segundos timeout
-    );
-    
-    if (res.ok) {
-      return res.json();
-    }
+    const res = await fetchWithTimeout(buildUrl("/api/health"), {}, 5000);
+    if (res.ok) return res.json();
     return { ok: false };
   } catch {
     return { ok: false };
