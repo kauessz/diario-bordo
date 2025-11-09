@@ -30,6 +30,7 @@ import google.generativeai as genai
 
 # Cache simples em memória (TTL 30 minutos)
 from cachetools import TTLCache
+kpi_cache = TTLCache(maxsize=200, ttl=900)  # 15 min para KPIs agregados
 cache = TTLCache(maxsize=100, ttl=1800)  # 30 minutos
 
 
@@ -437,6 +438,22 @@ def load_booking_df(xlsx_bytes: bytes,
                     selected_embarcadores: Optional[List[str]] = None) -> pd.DataFrame:
     sheets = parse_excel_bytes(xlsx_bytes)
     df_all = pd.concat(sheets.values(), ignore_index=True)
+
+@lru_cache(maxsize=64)
+def _load_multi_cached(hash_key: str,
+                       xlsx_bytes: bytes,
+                       selected_ym_tuple: tuple,
+                       selected_emb_tuple: tuple) -> pd.DataFrame:
+    # Repassa como listas para a função real
+    return load_multi_df(xlsx_bytes, list(selected_ym_tuple), list(selected_emb_tuple))
+
+@lru_cache(maxsize=64)
+def _load_transp_cached(hash_key: str,
+                        xlsx_bytes: bytes,
+                        selected_ym_tuple: tuple,
+                        selected_emb_tuple: tuple) -> pd.DataFrame:
+    return load_transp_df(xlsx_bytes, list(selected_ym_tuple), list(selected_emb_tuple))
+
 
     col_status    = ensure_col(df_all, CANDS_BOOKING_STAT)
     col_dt        = ensure_col(df_all, CANDS_BOOKING_DT)
@@ -1510,6 +1527,12 @@ def api_summary(client: str, ym: str = Query(...), embarcador: str = Query(...))
     if not emb_list:
         raise HTTPException(status_code=400, detail="Nenhum embarcador informado")
 
+    # Cache de KPIs agregados por combinação (client, ym_list, emb_list)
+    _ckey = f"{client}|{','.join(sorted(ym_list))}|{','.join(sorted(emb_list))}"
+    cached = kpi_cache.get(_ckey)
+    if cached:
+        return JSONResponse(cached)
+
     booking_frames, multi_frames, transp_frames = [], [], []
     for y in ym_list:
         b_blob = get_latest_blob(client, y, "booking")
@@ -1517,9 +1540,13 @@ def api_summary(client: str, ym: str = Query(...), embarcador: str = Query(...))
         t_blob = get_latest_blob(client, y, "transp")
         if not b_blob or not m_blob or not t_blob:
             raise HTTPException(status_code=400, detail=f"Faltam planilhas p/ {y}.")
-        booking_frames.append(load_booking_df(b_blob, [y], emb_list))
-        multi_frames.append(load_multi_df(m_blob, [y], emb_list))
-        transp_frames.append(load_transp_df(t_blob, [y], emb_list))
+        # Use loaders com cache LRU baseados no hash do arquivo para evitar re-parsing
+        h_b = sha256_bytes(b_blob)
+        h_m = sha256_bytes(m_blob)
+        h_t = sha256_bytes(t_blob)
+        booking_frames.append(_load_booking_cached(h_b, b_blob, (y,), tuple(emb_list)))
+        multi_frames.append(_load_multi_cached(h_m, m_blob, (y,), tuple(emb_list)))
+        transp_frames.append(_load_transp_cached(h_t, t_blob, (y,), tuple(emb_list)))
 
     booking_concat = pd.concat(booking_frames, ignore_index=True) if booking_frames else pd.DataFrame()
     multi_concat   = pd.concat(multi_frames,   ignore_index=True) if multi_frames   else pd.DataFrame()
@@ -1532,6 +1559,7 @@ def api_summary(client: str, ym: str = Query(...), embarcador: str = Query(...))
         "transp_len": len(transp_concat),
         "multi_len": len(multi_concat),
     }
+    kpi_cache[_ckey] = {"kpis": kpis, "debug": debug_info}
     return JSONResponse({"kpis": kpis, "debug": debug_info})
 
 @app.post("/api/generate-email")
@@ -1544,9 +1572,15 @@ async def api_generate_email(payload: dict):
 
     booking_frames, multi_frames, transp_frames = [], [], []
     for y in yms:
-        booking_frames.append(load_booking_df(get_latest_blob(client, y, "booking"), [y], embarcadores))
-        multi_frames.append(load_multi_df(get_latest_blob(client, y, "multi"), [y], embarcadores))
-        transp_frames.append(load_transp_df(get_latest_blob(client, y, "transp"), [y], embarcadores))
+        b_blob = get_latest_blob(client, y, "booking")
+        m_blob = get_latest_blob(client, y, "multi")
+        t_blob = get_latest_blob(client, y, "transp")
+        if not b_blob or not m_blob or not t_blob:
+            raise HTTPException(status_code=400, detail=f"Faltam planilhas p/ {y}.")
+        h_b = sha256_bytes(b_blob); h_m = sha256_bytes(m_blob); h_t = sha256_bytes(t_blob)
+        booking_frames.append(_load_booking_cached(h_b, b_blob, (y,), tuple(embarcadores)))
+        multi_frames.append(_load_multi_cached(h_m, m_blob, (y,), tuple(embarcadores)))
+        transp_frames.append(_load_transp_cached(h_t, t_blob, (y,), tuple(embarcadores)))
 
     booking_concat = pd.concat(booking_frames, ignore_index=True) if booking_frames else pd.DataFrame()
     multi_concat   = pd.concat(multi_frames,   ignore_index=True) if multi_frames   else pd.DataFrame()

@@ -7,8 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # Tuning to reduce memory usage with numpy/pandas
     OPENBLAS_NUM_THREADS=1 \
     OMP_NUM_THREADS=1 \
-    NUMEXPR_MAX_THREADS=1 \
-    UVICORN_WORKERS=1
+    NUMEXPR_MAX_THREADS=1
 
 WORKDIR /app
 
@@ -25,8 +24,8 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY backend ./backend
 
 # Default port (Koyeb will route 80/443 to this container port)
-ENV PORT=8080
+ENV PORT=8080 UVICORN_WORKERS=1
 EXPOSE 8080
 
 # Start
-CMD ["uvicorn","backend.app:app","--host","0.0.0.0","--port","8080","--workers","1","--timeout-keep-alive","30"]
+CMD ["sh","-c","uvicorn backend.app:app --host 0.0.0.0 --port 8080 --workers ${UVICORN_WORKERS:-1} --timeout-keep-alive 50"]
