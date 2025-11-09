@@ -43,39 +43,78 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 import socket
 
 def _prepare_supabase_url(url: str) -> str:
+    """
+    Normaliza a URL para o Supabase:
+    - Garante sslmode=require
+    - Se DB_USE_POOLER=true (default), usa porta 6543; senão mantém/usa 5432
+    - Se DB_FORCE_IPV4=true (default), resolve host IPv4 e injeta ?hostaddr=A.B.C.D
+    """
+    from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+    import socket
+
+    DB_USE_POOLER = os.getenv("DB_USE_POOLER", "true").lower() in ("1","true","yes")
+    DB_FORCE_IPV4 = os.getenv("DB_FORCE_IPV4", "true").lower() in ("1","true","yes")
 
     try:
         u = urlparse(url)
         if not u.scheme.startswith("postgres"):
             return url
+        if not u.hostname:
+            return url
+
+        q = dict(parse_qsl(u.query or ""))
+        if "sslmode" not in q:
+            q["sslmode"] = "require"
+
+        port = u.port
+        if "supabase.co" in u.hostname:
+            if DB_USE_POOLER:
+                port = 6543
+            else:
+                port = 5432 if (u.port is None or u.port == 6543) else u.port
+
+        if DB_FORCE_IPV4:
+            try:
+                infos = socket.getaddrinfo(u.hostname, port or 5432, family=socket.AF_INET, type=socket.SOCK_STREAM)
+                if infos:
+                    ipv4 = infos[0][4][0]
+                    q["hostaddr"] = ipv4
+            except Exception:
+                pass
+
+        newu = u._replace(netloc=f"{u.username}:{u.password}@{u.hostname}:{port}", query=urlencode(q))
+        return urlunparse(newu)
+    except Exception:
+        return url
         if u.hostname and "supabase.co" in u.hostname:
+            # se porta ausente ou 5432, troca para 6543 (pooler)
             port = u.port or 5432
             if port == 5432:
                 port = 6543
+
             userinfo = ""
             if u.username and u.password:
                 userinfo = f"{u.username}:{u.password}@"
             netloc = f"{userinfo}{u.hostname}:{port}"
+
+            # query params
             q = dict(parse_qsl(u.query))
             q.setdefault("sslmode", "require")
             q.setdefault("connect_timeout", "10")
-            # Prefer env override for hostaddr (forces IPv4)
-            env_hostaddr = os.getenv("SUPABASE_HOSTADDR", "").strip()
-            if env_hostaddr:
-                q["hostaddr"] = env_hostaddr
-            else:
-                try:
-                    infos = socket.getaddrinfo(u.hostname, port, socket.AF_INET, socket.SOCK_STREAM)
-                    if infos:
-                        ipv4 = infos[0][4][0]
-                        q.setdefault("hostaddr", ipv4)
-                except Exception:
-                    pass
+
+            # tentar resolver A (IPv4) e inserir hostaddr
+            try:
+                infos = socket.getaddrinfo(u.hostname, port, socket.AF_INET, socket.SOCK_STREAM)
+                if infos:
+                    ipv4 = infos[0][4][0]
+                    q.setdefault("hostaddr", ipv4)
+            except Exception:
+                pass
+
             return urlunparse((u.scheme, netloc, u.path, u.params, urlencode(q), u.fragment))
     except Exception:
         pass
     return url
-    
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL", "postgresql://user:pass@host:5432/dbname")
 SUPABASE_DB_URL = _prepare_supabase_url(SUPABASE_DB_URL)
@@ -102,16 +141,34 @@ engine: Engine = create_engine(
 )
 app = FastAPI()
 
-@app.get("/api/health", include_in_schema=False)
+import time
+
+@app.on_event("startup")
+def _startup_db_init():
+    if not os.getenv("RUN_DB_INIT_AT_IMPORT", "").lower() in ("1","true","yes"):
+        delay = 1.0
+        for attempt in range(1, 8):
+            try:
+                _ensure_schema(engine)
+                print(f"[DB] Schema ensured on startup (attempt {attempt}).")
+                break
+            except Exception as e:
+                print(f"[DB] Startup init attempt {attempt} failed: {e}")
+                time.sleep(delay)
+                delay = min(delay * 2, 15)
+
+
+@app.get("/api/health")
 def health():
     db_ok = False
     try:
+        from sqlalchemy import text
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         db_ok = True
     except Exception:
         db_ok = False
-    return {"ok": True, "db_ok": db_ok, "cache_size": len(cache)}
+    return {"ok": True, "db_ok": bool(db_ok), "cache_size": len(cache)}
 
 origins_env = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173,http://127.0.0.1:5173")
 origin_list = [o.strip() for o in origins_env.split(",") if o.strip()]
@@ -133,7 +190,7 @@ else:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
+
 
 # --- Gemini (AI) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -150,87 +207,40 @@ except Exception:
 
 # =============================================================================
 # DB SCHEMA
-# =============================================================================
-# Inicialização do banco no startup (compatível com Postgres e SQLite) + retry
-def _init_db_schema(conn, dialect: str):
-    if dialect == "sqlite":
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS uploads (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                client TEXT NOT NULL,
-                ym TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                data BLOB NOT NULL,
-                hash TEXT,
-                created_at TEXT NOT NULL
-            )
-        """))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_uploads_client_ym_kind ON uploads (client, ym, kind)"))
-        # UNIQUE composto pode ser feito com CREATE UNIQUE INDEX em SQLite
-        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_uploads_client_ym_kind_hash ON uploads (client, ym, kind, hash)"))
-    else:
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS uploads (
-                id SERIAL PRIMARY KEY,
-                client TEXT NOT NULL,
-                ym TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                data BYTEA NOT NULL,
-                hash TEXT,
-                created_at TEXT NOT NULL
-            )
-        """))
-        conn.execute(text("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS hash TEXT"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_uploads_client_ym_kind ON uploads (client, ym, kind)"))
-        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_uploads_client_ym_kind_hash ON uploads (client, ym, kind, hash)"))
 
-def _db_ping_ok() -> bool:
+def _ensure_schema(engine):
+    from sqlalchemy import text
+    with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS uploads (
+                    id SERIAL PRIMARY KEY,
+                    client TEXT NOT NULL,
+                    ym TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    data BYTEA NOT NULL,
+                    hash TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """))
+            conn.execute(text("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS hash TEXT"))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_uploads_client_ym_kind ON uploads (client, ym, kind)"
+            ))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_uploads_client_ym_kind_hash ON uploads (client, ym, kind, hash)"
+            ))
+
+# Optional: allow running at import (disabled by default)
+_RUN_DB_INIT_IMPORT = os.getenv("RUN_DB_INIT_AT_IMPORT", "").lower() in ("1","true","yes")
+if _RUN_DB_INIT_IMPORT:
     try:
-        with engine.connect() as c:
-            c.execute(text("SELECT 1"))
-        return True
-    except Exception:
-        return False
-
-@app.on_event("startup")
-def _on_startup():
-    import time
-    attempts = int(os.getenv("DB_INIT_ATTEMPTS", "6"))
-    delay = int(os.getenv("DB_INIT_DELAY", "5"))
-    last_err = None
-    for i in range(1, attempts+1):
-        try:
-            with engine.begin() as conn:
-                _init_db_schema(conn, engine.dialect.name)
-            print(f"[DB] Schema ready (dialect={engine.dialect.name})")
-            return
-        except Exception as e:
-            last_err = e
-            print(f"[DB] init attempt {i}/{attempts} failed: {e}")
-            time.sleep(delay)
-    print(f"[DB] WARNING: DB not reachable after {attempts} attempts. API will start in read-only/limited mode. Error: {last_err}")
-# =============================================================================
-with engine.begin() as conn:
-    conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS uploads (
-            id SERIAL PRIMARY KEY,
-            client TEXT NOT NULL,
-            ym TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            data BYTEA NOT NULL,
-            hash TEXT,
-            created_at TEXT NOT NULL
-        )
-    """))
-    conn.execute(text("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS hash TEXT"))
-    conn.execute(text(
-        "CREATE INDEX IF NOT EXISTS idx_uploads_client_ym_kind ON uploads (client, ym, kind)"
-    ))
-    conn.execute(text(
-        "CREATE UNIQUE INDEX IF NOT EXISTS ux_uploads_client_ym_kind_hash ON uploads (client, ym, kind, hash)"
-    ))
+        _ensure_schema(engine)
+    except Exception as e:
+        print(f"[DB] Import-time init failed: {e}")
 
 # =============================================================================
+# (schema init moved to _ensure_schema)
+# ======================================================================================================================================================
 # COLUMN CANDIDATES
 # =============================================================================
 CANDS_BOOKING_DT   = ["DATA_BOOKING", "data_booking", "DATA", "data", "DATA_BOOKING "]
@@ -417,7 +427,7 @@ def sha256_bytes(data: bytes) -> str:
 # LOADERS (COM CACHE)
 # =============================================================================
 @lru_cache(maxsize=32)
-def _load_booking_cached(hash_key: str, xlsx_bytes: bytes, 
+def _load_booking_cached(hash_key: str, xlsx_bytes: bytes,
                          selected_ym_tuple: tuple, selected_emb_tuple: tuple) -> pd.DataFrame:
     """Versão cacheável do load_booking_df"""
     return load_booking_df(xlsx_bytes, list(selected_ym_tuple), list(selected_emb_tuple))
@@ -531,7 +541,7 @@ def load_multi_df(xlsx_bytes: bytes,
         mask_just_ok = just_norm_series.apply(lambda x: len(x) > 1)
 
     df_valid = df_all[mask_causador_ok & mask_area_ok & mask_just_ok].copy()
-    
+
     # Aplicar normalização de justificativa
     df_valid["motivo_reagenda"] = just_norm_series.loc[df_valid.index].apply(normalize_justificativa)
     df_valid["porto_op"] = df_valid[col_porto].astype(str).str.strip() if col_porto else ""
@@ -580,13 +590,13 @@ def load_transp_df(xlsx_bytes: bytes,
         return pd.DataFrame(columns=["tipo_norm","justificativa_atraso","__ym","porto_origem"])
 
     df_all["tipo_norm"] = df_all[col_tipo_prog].astype(str).str.strip().str.lower()
-    
+
     # Aplicar normalização de justificativa
     if col_just_transp:
         df_all["justificativa_atraso"] = df_all[col_just_transp].apply(normalize_justificativa)
     else:
         df_all["justificativa_atraso"] = "Sem justificativa"
-        
+
     df_all["porto_origem"] = df_all[col_porto_orig].astype(str).str.strip() if col_porto_orig else ""
     df_all = df_all.drop_duplicates()
 
@@ -823,29 +833,29 @@ def generate_detalhamento_por_porto_html(df: pd.DataFrame, tipo: str, col_justif
     """
     if df.empty:
         return "<p><i>Nenhum registro encontrado.</i></p>"
-    
+
     html_parts = ["<div style='margin-top:20px;padding:15px;background:#f8f9fa;border-radius:8px;'>"]
     html_parts.append(f"<h4 style='color:#1976d2;margin-top:0;'>📍 Detalhamento por Porto</h4>")
-    
+
     # Agrupar por porto
     grouped_porto = df.groupby(col_porto)
-    
+
     for porto, grupo in grouped_porto:
         if not porto or str(porto).strip() == "":
             porto = "Porto não identificado"
-        
+
         total_porto = len(grupo)
         html_parts.append(f"<div style='margin-bottom:20px;padding:12px;background:white;border-left:3px solid #1f77b4;'>")
         html_parts.append(f"<h5 style='color:#333;margin-top:0;'><b>{porto}</b> ({total_porto} {tipo})</h5>")
         html_parts.append("<ul style='margin:8px 0;padding-left:20px;'>")
-        
+
         # Contar justificativas
         contagem = grupo[col_justificativa].value_counts()
         for justif, count in contagem.items():
             html_parts.append(f"<li style='margin:4px 0;'><b>{justif}</b>: {int(count)}</li>")
-        
+
         html_parts.append("</ul></div>")
-    
+
     html_parts.append("</div>")
     return "".join(html_parts)
 
@@ -855,49 +865,49 @@ def generate_tendencias_movimentacao_html(booking_df: pd.DataFrame, yms: List[st
     """
     if booking_df.empty or len(yms) < 2:
         return "<p><i>Dados insuficientes para análise de tendências (mínimo 2 períodos).</i></p>"
-    
+
     yms_sorted = sorted(yms)
     volumes = []
     for ym in yms_sorted:
         vol = booking_df[booking_df['ym'] == ym]['qtde'].sum()
         volumes.append(int(vol))
-    
+
     # Calcular variação total
     variacao_total = ((volumes[-1] - volumes[0]) / volumes[0] * 100) if volumes[0] > 0 else 0
     tendencia_texto = "crescimento" if variacao_total > 0 else "queda" if variacao_total < 0 else "estabilidade"
     cor_tendencia = "#2ca02c" if variacao_total > 0 else "#d62728" if variacao_total < 0 else "#666"
-    
+
     html_parts = ["<div style='background:#e3f2fd;border-left:4px solid #1976d2;padding:20px;margin:32px 0;border-radius:8px;'>"]
     html_parts.append("<h3 style='color:#1976d2;margin-top:0;'>📈 Tendências de Movimentação</h3>")
-    
+
     # Resumo executivo
     html_parts.append(f"<p style='font-size:15px;'><b>Análise do período:</b> {format_periodos_label(yms)}</p>")
     html_parts.append(f"<p style='font-size:15px;'>O volume de operações apresentou <b style='color:{cor_tendencia};'>{tendencia_texto} de {abs(variacao_total):.1f}%</b> no período analisado.</p>")
-    
+
     # Detalhamento mensal
     html_parts.append("<table style='width:100%;border-collapse:collapse;margin-top:15px;'>")
     html_parts.append("<tr style='background:#1976d2;color:white;'><th style='padding:10px;'>Período</th><th>Volume (TEUs)</th><th>Variação</th></tr>")
-    
+
     for i, ym in enumerate(yms_sorted):
         label_mes = format_ym_label(ym)
         vol = volumes[i]
-        
+
         if i == 0:
             var_texto = "-"
         else:
             var = ((volumes[i] - volumes[i-1]) / volumes[i-1] * 100) if volumes[i-1] > 0 else 100
             cor = "#2ca02c" if var > 0 else "#d62728" if var < 0 else "#666"
             var_texto = f"<span style='color:{cor};font-weight:bold;'>{var:+.1f}%</span>"
-        
+
         bg = "#fff" if i % 2 == 0 else "#f8f9fa"
         html_parts.append(f"<tr style='background:{bg};'><td style='padding:8px;'><b>{label_mes}</b></td><td style='text-align:center;'>{vol}</td><td style='text-align:center;'>{var_texto}</td></tr>")
-    
+
     html_parts.append("</table>")
-    
+
     # Análise por porto
     if not booking_df.empty:
         html_parts.append("<h4 style='margin-top:20px;'>🎯 Portos em Destaque</h4>")
-        
+
         # Porto com maior crescimento
         porto_crescimento = {}
         for porto in booking_df['porto_origem'].unique():
@@ -907,16 +917,16 @@ def generate_tendencias_movimentacao_html(booking_df: pd.DataFrame, yms: List[st
             if vol_inicio > 0:
                 crescimento = ((vol_fim - vol_inicio) / vol_inicio * 100)
                 porto_crescimento[porto] = crescimento
-        
+
         if porto_crescimento:
             top_crescimento = max(porto_crescimento.items(), key=lambda x: x[1])
             top_queda = min(porto_crescimento.items(), key=lambda x: x[1])
-            
+
             html_parts.append(f"<ul style='margin-top:10px;'>")
             html_parts.append(f"<li>🔹 <b>Maior crescimento:</b> {top_crescimento[0]} ({top_crescimento[1]:+.1f}%)</li>")
             html_parts.append(f"<li>🔻 <b>Maior queda:</b> {top_queda[0]} ({top_queda[1]:+.1f}%)</li>")
             html_parts.append("</ul>")
-    
+
     html_parts.append("</div>")
     return "".join(html_parts)
 
@@ -926,12 +936,12 @@ def generate_alinhamento_operacional_html(kpis: Dict, transp_df: pd.DataFrame, m
     """
     html_parts = ["<div style='background:#fff3e0;border-left:4px solid #ef6c00;padding:20px;margin:32px 0;border-radius:8px;'>"]
     html_parts.append("<h3 style='color:#ef6c00;margin-top:0;'>🎯 Considerações e Alinhamento Operacional</h3>")
-    
+
     total_ops = kpis.get('total_ops', 0)
     atrasos_coleta = kpis.get('atrasos_coleta', 0)
     atrasos_entrega = kpis.get('atrasos_entrega', 0)
     reagendamentos = kpis.get('reagendamentos', 0)
-    
+
     # Calcular taxas
     if total_ops > 0:
         taxa_atraso_coleta = (atrasos_coleta / total_ops) * 100
@@ -939,72 +949,72 @@ def generate_alinhamento_operacional_html(kpis: Dict, transp_df: pd.DataFrame, m
     else:
         taxa_atraso_coleta = 0
         taxa_atraso_entrega = 0
-    
+
     if not multi_df.empty:
         total_operacoes_multi = len(multi_df)
         taxa_reagendamento = (reagendamentos / total_operacoes_multi) * 100 if total_operacoes_multi > 0 else 0
     else:
         taxa_reagendamento = 0
-    
+
     # Status de Coletas
     html_parts.append("<h4 style='color:#333;'>📦 Status de Coletas</h4>")
     html_parts.append(f"<p style='font-size:14px;margin:8px 0;'>")
     html_parts.append(f"• Total de atrasos: <b style='color:#d32f2f;'>{atrasos_coleta}</b><br>")
     html_parts.append(f"• Taxa de atraso: <b style='color:#d32f2f;'>{taxa_atraso_coleta:.2f}%</b><br>")
-    
+
     if not transp_df.empty:
         df_coleta = transp_df[transp_df['tipo_norm'] == 'coleta']
         if not df_coleta.empty:
             top_causa_coleta = df_coleta['justificativa_atraso'].value_counts().iloc[0]
             top_causa_nome = df_coleta['justificativa_atraso'].value_counts().index[0]
             html_parts.append(f"• Principal causa: <b>{top_causa_nome}</b> ({int(top_causa_coleta)} ocorrências)<br>")
-    
+
     html_parts.append("</p>")
-    
+
     # Status de Entregas
     html_parts.append("<h4 style='color:#333;'>🚚 Status de Entregas</h4>")
     html_parts.append(f"<p style='font-size:14px;margin:8px 0;'>")
     html_parts.append(f"• Total de atrasos: <b style='color:#d32f2f;'>{atrasos_entrega}</b><br>")
     html_parts.append(f"• Taxa de atraso: <b style='color:#d32f2f;'>{taxa_atraso_entrega:.2f}%</b><br>")
-    
+
     if not transp_df.empty:
         df_entrega = transp_df[transp_df['tipo_norm'] == 'entrega']
         if not df_entrega.empty:
             top_causa_entrega = df_entrega['justificativa_atraso'].value_counts().iloc[0]
             top_causa_nome_ent = df_entrega['justificativa_atraso'].value_counts().index[0]
             html_parts.append(f"• Principal causa: <b>{top_causa_nome_ent}</b> ({int(top_causa_entrega)} ocorrências)<br>")
-    
+
     html_parts.append("</p>")
-    
+
     # Reagendamentos
     html_parts.append("<h4 style='color:#333;'>🔄 Reagendamentos</h4>")
     html_parts.append(f"<p style='font-size:14px;margin:8px 0;'>")
     html_parts.append(f"• Total de reagendamentos: <b style='color:#f57c00;'>{reagendamentos}</b><br>")
     html_parts.append(f"• Taxa de reagendamento: <b style='color:#f57c00;'>{taxa_reagendamento:.2f}%</b><br>")
-    
+
     if not multi_df.empty:
         top_causa_reag = multi_df['motivo_reagenda'].value_counts().iloc[0]
         top_causa_nome_reag = multi_df['motivo_reagenda'].value_counts().index[0]
         html_parts.append(f"• Principal causa: <b>{top_causa_nome_reag}</b> ({int(top_causa_reag)} ocorrências)<br>")
-    
+
     html_parts.append("</p>")
-    
+
     # Recomendações Práticas
     html_parts.append("<h4 style='color:#333;margin-top:20px;'>💡 Ações Recomendadas</h4>")
     html_parts.append("<ul style='font-size:14px;line-height:1.8;'>")
-    
+
     if taxa_atraso_coleta > 5:
         html_parts.append("<li>🔸 <b>Coletas:</b> Implementar checklist de documentação prévia e agendar follow-up 24h antes</li>")
-    
+
     if taxa_atraso_entrega > 5:
         html_parts.append("<li>🔸 <b>Entregas:</b> Revisar janelas de entrega com clientes recorrentes e verificar disponibilidade de depots</li>")
-    
+
     if taxa_reagendamento > 10:
         html_parts.append("<li>🔸 <b>Reagendamentos:</b> Intensificar comunicação entre transportador e terminal, estabelecer SLA de resposta</li>")
-    
+
     html_parts.append("<li>🔸 <b>Monitoramento:</b> Acompanhamento semanal de indicadores e reunião mensal de performance</li>")
     html_parts.append("</ul>")
-    
+
     html_parts.append("</div>")
     return "".join(html_parts)
 
@@ -1234,23 +1244,23 @@ def build_email_v2(kpis: Dict[str, object], yms: List[str], embarcadores: List[s
     graf_reag_b64         = chart_reagendamentos_por_causa_e_porto(multi_df)
 
     tabela_variacao_html  = generate_variacao_table(booking_df, yms)
-    
+
     # NOVAS SEÇÕES
     tendencias_html = generate_tendencias_movimentacao_html(booking_df, yms)
     alinhamento_html = generate_alinhamento_operacional_html(kpis, transp_df, multi_df)
-    
+
     # Detalhamento por porto
     df_coleta = transp_df[transp_df['tipo_norm'] == 'coleta'] if not transp_df.empty else pd.DataFrame()
     df_entrega = transp_df[transp_df['tipo_norm'] == 'entrega'] if not transp_df.empty else pd.DataFrame()
-    
+
     detalhamento_coleta_html = generate_detalhamento_por_porto_html(
         df_coleta, "atrasos", "justificativa_atraso", "porto_origem"
     ) if not df_coleta.empty else ""
-    
+
     detalhamento_entrega_html = generate_detalhamento_por_porto_html(
         df_entrega, "atrasos", "justificativa_atraso", "porto_origem"
     ) if not df_entrega.empty else ""
-    
+
     detalhamento_reag_html = generate_detalhamento_por_porto_html(
         multi_df, "reagendamentos", "motivo_reagenda", "porto_op"
     ) if not multi_df.empty else ""
@@ -1334,7 +1344,7 @@ def build_email_v2(kpis: Dict[str, object], yms: List[str], embarcadores: List[s
         f"<p style='font-size:15px;'><b>Coletas (total):</b> <span style='color:#d32f2f;font-weight:bold;'>{atrasos_coleta}</span></p>",
         img_tag(graf_atraso_col_b64, "Atrasos em Coleta por Motivo e Porto"),
         detalhamento_coleta_html,  # NOVO: Lista por porto
-        
+
         f"<p style='font-size:15px;margin-top:24px;'><b>Entregas (total):</b> <span style='color:#d32f2f;font-weight:bold;'>{atrasos_entrega}</span></p>",
         img_tag(graf_atraso_ent_b64, "Atrasos na Entrega por Motivo e Porto"),
         detalhamento_entrega_html,  # NOVO: Lista por porto
@@ -1404,13 +1414,13 @@ def get_latest_blob(client: str, ym: str, kind: str) -> Optional[bytes]:
     cache_key = f"{client}_{ym}_{kind}"
     if cache_key in cache:
         return cache[cache_key]
-    
+
     with engine.begin() as conn:
         row = conn.execute(
             text("SELECT data FROM uploads WHERE client=:c AND ym=:y AND kind=:k ORDER BY id DESC LIMIT 1"),
             {"c": client, "y": ym, "k": kind},
         ).fetchone()
-    
+
     if row:
         cache[cache_key] = row[0]
         return row[0]
@@ -1477,7 +1487,7 @@ async def upload(client: str = Form(...),
                     "VALUES (:c,:y,:k,:d,:h,:t)"
                 ), {"c": client, "y": ym, "k": kind, "d": blob, "h": h, "t": now})
                 inserted.append({"ym": ym, "kind": kind})
-                
+
                 # Limpar cache
                 cache_key = f"{client}_{ym}_{kind}"
                 if cache_key in cache:
@@ -1582,14 +1592,14 @@ def api_available_data(client: str = Query(..., description="Identificador do bu
     """
     if not client:
         raise HTTPException(status_code=400, detail="Informe ?client=...")
-    
+
     try:
         with engine.begin() as conn:
             # Buscar períodos únicos onde temos dados completos (booking, multi, transp)
             periods_query = text("""
-                SELECT DISTINCT ym 
-                FROM uploads 
-                WHERE client = :c 
+                SELECT DISTINCT ym
+                FROM uploads
+                WHERE client = :c
                   AND ym IN (
                       SELECT ym FROM uploads WHERE client = :c AND kind = 'booking'
                       INTERSECT
@@ -1601,7 +1611,7 @@ def api_available_data(client: str = Query(..., description="Identificador do bu
             """)
             periods_result = conn.execute(periods_query, {"c": client}).fetchall()
             periods = [row[0] for row in periods_result]
-            
+
             # Se não há períodos, retorna vazio
             if not periods:
                 return JSONResponse({
@@ -1610,11 +1620,11 @@ def api_available_data(client: str = Query(..., description="Identificador do bu
                     "periods": [],
                     "embarcadores": []
                 })
-            
+
             # Carregar embarcadores do período mais recente
             latest_period = periods[0]
             booking_blob = get_latest_blob(client, latest_period, "booking")
-            
+
             if booking_blob:
                 # Parsear booking para extrair embarcadores
                 booking_sheets = parse_excel_bytes(booking_blob)
@@ -1622,7 +1632,7 @@ def api_available_data(client: str = Query(..., description="Identificador do bu
                     df_all = pd.concat(booking_sheets.values(), ignore_index=True)
                     col_emb = ensure_col(df_all, CANDS_BOOKING_EMB)
                     col_stat = ensure_col(df_all, CANDS_BOOKING_STAT)
-                    
+
                     if col_emb:
                         df_active = df_all[df_all[col_stat].astype(str).str.strip().str.lower() == "ativo"] if col_stat else df_all
                         embarcadores = sorted(df_active[col_emb].astype(str).str.strip().dropna().unique().tolist())
@@ -1632,14 +1642,14 @@ def api_available_data(client: str = Query(..., description="Identificador do bu
                     embarcadores = []
             else:
                 embarcadores = []
-            
+
             return JSONResponse({
                 "status": "ok",
                 "has_data": True,
                 "periods": periods,
                 "embarcadores": embarcadores
             })
-            
+
     except Exception as e:
         print(f"[ERROR] Falha ao buscar dados disponíveis: {str(e)}")
         return JSONResponse({
@@ -1669,12 +1679,20 @@ def api_flush(client: str = Query(..., description="Identificador do bucket/clie
 
     # Limpar cache
     cache.clear()
-    
+
     return JSONResponse({"status": "ok", "deleted": int(deleted), "detail": detail})
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "cache_size": len(cache)}
+    db_ok = False
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        db_ok = False
+    return {"ok": True, "db_ok": bool(db_ok), "cache_size": len(cache)}
 
 @app.get("/api/clear-cache")
 def clear_cache():

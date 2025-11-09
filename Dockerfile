@@ -1,63 +1,32 @@
-# Multi-stage build para otimização
-FROM python:3.11-slim as builder
-
-# Instalar dependências de sistema necessárias
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Criar diretório de trabalho
-WORKDIR /app
-
-# Copiar requirements e instalar dependências
-COPY requirements.txt .
-RUN pip install --user --no-cache-dir -r requirements.txt
-
-# Stage final
+# Dockerfile — FastAPI backend for Koyeb
 FROM python:3.11-slim
 
-# Instalar apenas runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libpq5 \
-    && rm -rf /var/lib/apt/lists/*
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    # Tuning to reduce memory usage with numpy/pandas
+    OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    NUMEXPR_MAX_THREADS=1 \
+    UVICORN_WORKERS=1
 
-# Criar usuário não-root
-RUN useradd -m -u 1000 appuser
-
-# Criar diretório de trabalho
 WORKDIR /app
 
-# Copiar dependências Python do builder
-COPY --from=builder /root/.local /home/appuser/.local
+# System deps (psycopg2, openpyxl/xlrd use libpq/libxml/zlib)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
-# Copiar código da aplicação
-COPY app.py .
-COPY .env* ./
+# Requirements first for better layer caching
+COPY requirements.txt ./requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Ajustar permissões
-RUN chown -R appuser:appuser /app
+# App code
+COPY backend ./backend
 
-# Usar usuário não-root
-USER appuser
-
-# Adicionar .local/bin ao PATH
-ENV PATH=/home/appuser/.local/bin:$PATH
-
-# Expor porta
+# Default port (Koyeb will route 80/443 to this container port)
+ENV PORT=8080
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD python -c "import requests; requests.get('http://localhost:8080/api/health')"
-
-# Comando de início com gunicorn
-CMD ["gunicorn", "app:app", \
-     "--bind", "0.0.0.0:8080", \
-     "--workers", "2", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--timeout", "120", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-", \
-     "--log-level", "info"]
+# Start
+CMD ["uvicorn","backend.app:app","--host","0.0.0.0","--port","8080","--workers","1","--timeout-keep-alive","30"]
