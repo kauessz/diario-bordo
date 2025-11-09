@@ -43,44 +43,39 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 import socket
 
 def _prepare_supabase_url(url: str) -> str:
-    """
-    Força uso do Session Pooler (6543) e de IPv4 quando possível (adicionando hostaddr=A.B.C.D)
-    e garante sslmode=require para TLS. Mantém SNI e validação usando 'host' enquanto o TCP
-    usa 'hostaddr'.
-    """
+
     try:
         u = urlparse(url)
         if not u.scheme.startswith("postgres"):
             return url
         if u.hostname and "supabase.co" in u.hostname:
-            # se porta ausente ou 5432, troca para 6543 (pooler)
             port = u.port or 5432
             if port == 5432:
                 port = 6543
-
             userinfo = ""
             if u.username and u.password:
                 userinfo = f"{u.username}:{u.password}@"
             netloc = f"{userinfo}{u.hostname}:{port}"
-
-            # query params
             q = dict(parse_qsl(u.query))
             q.setdefault("sslmode", "require")
             q.setdefault("connect_timeout", "10")
-
-            # tentar resolver A (IPv4) e inserir hostaddr
-            try:
-                infos = socket.getaddrinfo(u.hostname, port, socket.AF_INET, socket.SOCK_STREAM)
-                if infos:
-                    ipv4 = infos[0][4][0]
-                    q.setdefault("hostaddr", ipv4)
-            except Exception:
-                pass
-
+            # Prefer env override for hostaddr (forces IPv4)
+            env_hostaddr = os.getenv("SUPABASE_HOSTADDR", "").strip()
+            if env_hostaddr:
+                q["hostaddr"] = env_hostaddr
+            else:
+                try:
+                    infos = socket.getaddrinfo(u.hostname, port, socket.AF_INET, socket.SOCK_STREAM)
+                    if infos:
+                        ipv4 = infos[0][4][0]
+                        q.setdefault("hostaddr", ipv4)
+                except Exception:
+                    pass
             return urlunparse((u.scheme, netloc, u.path, u.params, urlencode(q), u.fragment))
     except Exception:
         pass
     return url
+    
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL", "postgresql://user:pass@host:5432/dbname")
 SUPABASE_DB_URL = _prepare_supabase_url(SUPABASE_DB_URL)
@@ -109,7 +104,14 @@ app = FastAPI()
 
 @app.get("/api/health", include_in_schema=False)
 def health():
-    return {"ok": True}
+    db_ok = False
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        db_ok = False
+    return {"ok": True, "db_ok": db_ok, "cache_size": len(cache)}
 
 origins_env = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173,http://127.0.0.1:5173")
 origin_list = [o.strip() for o in origins_env.split(",") if o.strip()]
@@ -148,6 +150,65 @@ except Exception:
 
 # =============================================================================
 # DB SCHEMA
+# =============================================================================
+# Inicialização do banco no startup (compatível com Postgres e SQLite) + retry
+def _init_db_schema(conn, dialect: str):
+    if dialect == "sqlite":
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS uploads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client TEXT NOT NULL,
+                ym TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                data BLOB NOT NULL,
+                hash TEXT,
+                created_at TEXT NOT NULL
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_uploads_client_ym_kind ON uploads (client, ym, kind)"))
+        # UNIQUE composto pode ser feito com CREATE UNIQUE INDEX em SQLite
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_uploads_client_ym_kind_hash ON uploads (client, ym, kind, hash)"))
+    else:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS uploads (
+                id SERIAL PRIMARY KEY,
+                client TEXT NOT NULL,
+                ym TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                data BYTEA NOT NULL,
+                hash TEXT,
+                created_at TEXT NOT NULL
+            )
+        """))
+        conn.execute(text("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS hash TEXT"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_uploads_client_ym_kind ON uploads (client, ym, kind)"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_uploads_client_ym_kind_hash ON uploads (client, ym, kind, hash)"))
+
+def _db_ping_ok() -> bool:
+    try:
+        with engine.connect() as c:
+            c.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
+
+@app.on_event("startup")
+def _on_startup():
+    import time
+    attempts = int(os.getenv("DB_INIT_ATTEMPTS", "6"))
+    delay = int(os.getenv("DB_INIT_DELAY", "5"))
+    last_err = None
+    for i in range(1, attempts+1):
+        try:
+            with engine.begin() as conn:
+                _init_db_schema(conn, engine.dialect.name)
+            print(f"[DB] Schema ready (dialect={engine.dialect.name})")
+            return
+        except Exception as e:
+            last_err = e
+            print(f"[DB] init attempt {i}/{attempts} failed: {e}")
+            time.sleep(delay)
+    print(f"[DB] WARNING: DB not reachable after {attempts} attempts. API will start in read-only/limited mode. Error: {last_err}")
 # =============================================================================
 with engine.begin() as conn:
     conn.execute(text("""
