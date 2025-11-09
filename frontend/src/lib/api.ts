@@ -1,5 +1,4 @@
 // frontend/src/lib/api.ts
-
 export type SummaryKpis = {
   total_ops: number | null;
   porto_top: string | null;
@@ -10,13 +9,13 @@ export type SummaryKpis = {
 };
 
 /**
- * Resolve a URL base da API de forma inteligente.
+ * Resolve a URL base da API de forma inteligente
  * Prioridade:
- *   1) window.__ENV__.API_BASE_URL (runtime, sem rebuild)
- *   2) VITE_API_BASE
- *   3) VITE_API_BASE_URL
- *   4) localhost (dev)
- *   5) fallback Koyeb (produção)
+ * 1) window.__ENV__.API_BASE_URL (runtime, sem rebuild)
+ * 2) VITE_API_BASE
+ * 3) VITE_API_BASE_URL
+ * 4) localhost (dev)
+ * 5) fallback Koyeb (prod)
  */
 function resolveApiBase(): string {
   const runtime = (window as any)?.__ENV__?.API_BASE_URL;
@@ -24,14 +23,14 @@ function resolveApiBase(): string {
     return String(runtime).trim().replace(/\/+$/, "");
   }
 
-  const fromEnvA = (import.meta as any)?.env?.VITE_API_BASE;
-  if (fromEnvA && String(fromEnvA).trim()) {
-    return String(fromEnvA).trim().replace(/\/+$/, "");
+  const fromEnv = (import.meta as any)?.env?.VITE_API_BASE;
+  if (fromEnv && String(fromEnv).trim()) {
+    return String(fromEnv).trim().replace(/\/+$/, "");
   }
 
-  const fromEnvB = (import.meta as any)?.env?.VITE_API_BASE_URL;
-  if (fromEnvB && String(fromEnvB).trim()) {
-    return String(fromEnvB).trim().replace(/\/+$/, "");
+  const fromEnv2 = (import.meta as any)?.env?.VITE_API_BASE_URL;
+  if (fromEnv2 && String(fromEnv2).trim()) {
+    return String(fromEnv2).trim().replace(/\/+$/, "");
   }
 
   // fallback só para dev local
@@ -42,7 +41,7 @@ function resolveApiBase(): string {
     if (isDev) return "http://127.0.0.1:8000";
   }
 
-  // fallback produção (mantém seu Koyeb)
+  // produção (mantém seu Koyeb)
   return "https://purring-wenonah-kauessz-ef9b5835.koyeb.app";
 }
 
@@ -51,7 +50,7 @@ const DEFAULT_TIMEOUT = Number((import.meta as any)?.env?.VITE_API_TIMEOUT_MS ??
 
 console.log(`[API Client] Base URL: ${API_BASE}`);
 
-/** Monta URL com segurança (sem // duplicado, sem perder query) */
+/** Monta URL com segurança (sem // duplicado) */
 function buildUrl(path: string, query?: Record<string, string | number | boolean>) {
   const clean = String(path || "").replace(/^\/+/, "");
   const u = new URL(clean, API_BASE + "/");
@@ -63,44 +62,47 @@ function buildUrl(path: string, query?: Record<string, string | number | boolean
   return u.toString();
 }
 
-/** Helper para verificar resposta HTTP e lançar erro descritivo */
+/**
+ * Helper para verificar resposta HTTP e lançar erro descritivo
+ */
 async function ensureOk(res: Response): Promise<void> {
   if (!res.ok) {
     let errorMessage = `HTTP ${res.status} - ${res.statusText}`;
     try {
-      // tenta extrair JSON {detail: "..."}
       const ct = res.headers.get("content-type") || "";
       if (ct.includes("application/json")) {
-        const data = await res.json().catch(() => null);
-        if (data && (data.detail || data.error)) {
-          errorMessage += `: ${data.detail || data.error}`;
-        }
+        const errorData = await res.json().catch(() => null);
+        if (errorData?.detail) errorMessage += `: ${errorData.detail}`;
+        else if (errorData?.error) errorMessage += `: ${errorData.error}`;
       } else {
         const txt = await res.text().catch(() => "");
         if (txt) errorMessage += `: ${txt.slice(0, 300)}`;
       }
-    } catch {
-      /* ignore */
-    }
+    } catch {}
     throw new Error(errorMessage);
   }
 }
 
-/** Wrapper fetch com timeout */
+/**
+ * Wrapper fetch com timeout
+ */
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
   timeout: number = DEFAULT_TIMEOUT
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(new Error(`timeout:${timeout}`)), timeout);
-
+  const id = setTimeout(() => controller.abort(new Error(`timeout:${timeout}`)), timeout);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    clearTimeout(timeoutId);
-    return response;
+    const res = await fetch(url, {
+      cache: "no-store",
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(id);
+    return res;
   } catch (error: any) {
-    clearTimeout(timeoutId);
+    clearTimeout(id);
     if (error?.name === "AbortError" || String(error?.message || "").startsWith("timeout:")) {
       throw new Error("Request timeout - servidor demorou muito para responder");
     }
@@ -128,7 +130,11 @@ export async function uploadFiles(
   form.append("multimodal", multiFile);
   form.append("transportes", transpFile);
 
-  const res = await fetchWithTimeout(buildUrl("/api/upload"), { method: "POST", body: form }, 120000);
+  const res = await fetchWithTimeout(
+    buildUrl("/api/upload"),
+    { method: "POST", body: form },
+    120000 // 2 min
+  );
   await ensureOk(res);
   return res.json();
 }
@@ -148,7 +154,7 @@ export async function getSummaryBy(
       embarcador: embarcadores.join(","),
     }),
     {},
-    120000 // 120s para consultas mais pesadas
+    120000
   );
   await ensureOk(res);
   return res.json();
@@ -169,7 +175,7 @@ export async function generateEmailBy(payload: {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    90000 // 90s - IA pode demorar
+    90000
   );
   await ensureOk(res);
   return res.json();
@@ -190,7 +196,7 @@ export async function generateEmlBy(payload: {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    90000 // 90s
+    90000
   );
   await ensureOk(res);
   return res.json();
@@ -211,7 +217,7 @@ export async function getAvailableData(
   const res = await fetchWithTimeout(
     buildUrl("/api/available-data", { client }),
     {},
-    30000 // 30s (antes era 10s e podia estourar)
+    60000 // ↑ 60s (estava curto e estava estourando)
   );
   await ensureOk(res);
   return res.json();
