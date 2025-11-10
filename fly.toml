@@ -1,8 +1,4 @@
-# fly.toml app configuration file generated for diario-bordo-api-kaue on 2025-11-06T22:44:36-03:00
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
+# fly.toml - Diário Operacional (OTIMIZADO ANTI-OOM)
 app = 'diario-bordo-api-kaue'
 primary_region = 'gru'
 
@@ -10,24 +6,48 @@ primary_region = 'gru'
   dockerfile = 'Dockerfile'
 
 [env]
+  # CORS
   FRONTEND_ORIGIN_REGEX = '^https://[a-z0-9-]+\.netlify\.app$|^https://.*\.app$'
+  
+  # Porta
   PORT = '8080'
+  
+  # OTIMIZAÇÕES DE MEMÓRIA (CRÍTICO!)
+  MALLOC_ARENA_MAX = '2'
+  PYTHONHASHSEED = '0'
+  PYTHONUNBUFFERED = '1'
+  PYTHONDONTWRITEBYTECODE = '1'
+  
+  # NumPy/Pandas (limitar threads)
+  OMP_NUM_THREADS = '1'
+  OPENBLAS_NUM_THREADS = '1'
+  NUMEXPR_NUM_THREADS = '1'
+  
+  # Database (usar pooler do Supabase)
+  DB_USE_POOLER = 'true'
+  DB_FORCE_IPV4 = 'false'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false   # <-- era 'off' (string); use boolean
+  auto_stop_machines = false  # ZERO cold starts
   auto_start_machines = true
   min_machines_running = 1
 
-  # Health check via HTTP (escolha UMA das opções de path abaixo)
+  # CRÍTICO: Limitar concorrência para evitar OOM
+  [http_service.concurrency]
+    type = 'requests'
+    soft_limit = 8   # Máximo 8 requests simultâneas
+    hard_limit = 12
+
+  # Health check
   [[http_service.checks]]
     interval = '15s'
     timeout = '5s'
     grace_period = '20s'
     method = 'get'
     protocol = 'http'
-    path = '/api/health'       # Opção A: se você criar essa rota no FastAPI
+    path = '/api/health'
 
 [[vm]]
   memory = '512mb'

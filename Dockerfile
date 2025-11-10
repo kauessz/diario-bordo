@@ -1,31 +1,47 @@
-# Dockerfile — FastAPI backend for Koyeb
+# Dockerfile — FastAPI Backend (OTIMIZADO ANTI-OOM)
 FROM python:3.11-slim
 
+# OTIMIZAÇÕES DE MEMÓRIA (CRÍTICO!)
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=0 \
     PIP_NO_CACHE_DIR=1 \
-    # Tuning to reduce memory usage with numpy/pandas
+    # Malloc otimizado (reduz fragmentação)
+    MALLOC_ARENA_MAX=2 \
+    MALLOC_MMAP_THRESHOLD_=131072 \
+    MALLOC_TRIM_THRESHOLD_=131072 \
+    MALLOC_TOP_PAD_=131072 \
+    MALLOC_MMAP_MAX_=65536 \
+    # NumPy/Pandas/OpenBLAS (limitar threads)
     OPENBLAS_NUM_THREADS=1 \
     OMP_NUM_THREADS=1 \
-    NUMEXPR_MAX_THREADS=1
+    NUMEXPR_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1
 
 WORKDIR /app
 
-# System deps (psycopg2, openpyxl/xlrd use libpq/libxml/zlib)
+# System deps (mínimos necessários)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libpq-dev curl ca-certificates \
+    build-essential \
+    libpq-dev \
+    curl \
+    ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Requirements first for better layer caching
+# Requirements first (cache de layer)
 COPY requirements.txt ./requirements.txt
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt && \
+    # Limpar cache pip manualmente
+    rm -rf /root/.cache/pip
 
 # App code
 COPY backend ./backend
 
-# Default port (Koyeb will route 80/443 to this container port)
-ENV PORT=8080 UVICORN_WORKERS=1
+# Porta
+ENV PORT=8080
 EXPOSE 8080
 
-# Start
-CMD ["sh","-c","uvicorn backend.app:app --host 0.0.0.0 --port 8080 --workers ${UVICORN_WORKERS:-1} --timeout-keep-alive 50"]
+# CRÍTICO: Usar uvicorn direto (sem gunicorn)
+# 1 worker apenas (não multiplica memória)
+CMD ["sh", "-c", "uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1 --limit-concurrency 10 --timeout-keep-alive 5"]

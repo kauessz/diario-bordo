@@ -41,8 +41,8 @@ function resolveApiBase(): string {
     if (isDev) return "http://127.0.0.1:8000";
   }
 
-  // produção (mantém seu Koyeb)
-  return "https://purring-wenonah-kauessz-ef9b5835.koyeb.app";
+  // produção (Fly.io - Diário Operacional)
+  return "https://diario-bordo-api-kaue.fly.dev";
 }
 
 const API_BASE = resolveApiBase();

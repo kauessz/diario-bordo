@@ -4,6 +4,7 @@ import os
 import base64
 import math
 import hashlib
+import gc  # OTIMIZADO: Garbage collection explícito
 from datetime import datetime, date
 from typing import List, Optional, Dict, Tuple
 from collections import defaultdict
@@ -29,9 +30,10 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 
 # Cache simples em memória (TTL 30 minutos)
+# OTIMIZADO: Reduzido para economizar memória em 512MB
 from cachetools import TTLCache
-kpi_cache = TTLCache(maxsize=200, ttl=900)  # 15 min para KPIs agregados
-cache = TTLCache(maxsize=100, ttl=1800)  # 30 minutos
+kpi_cache = TTLCache(maxsize=50, ttl=900)  # 15 min para KPIs agregados (reduzido de 200)
+cache = TTLCache(maxsize=30, ttl=1800)  # 30 minutos (reduzido de 100)
 
 
 
@@ -137,8 +139,9 @@ engine: Engine = create_engine(
     SUPABASE_DB_URL,
     future=True,
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
+    pool_size=2,          # OTIMIZADO: Reduzido de 5 para 2 (economiza memória)
+    max_overflow=3,       # OTIMIZADO: Reduzido de 10 para 3
+    pool_recycle=300,     # OTIMIZADO: Reciclar conexões a cada 5min
 )
 app = FastAPI()
 
@@ -427,7 +430,7 @@ def sha256_bytes(data: bytes) -> str:
 # =============================================================================
 # LOADERS (COM CACHE)
 # =============================================================================
-@lru_cache(maxsize=32)
+@lru_cache(maxsize=8)  # OTIMIZADO: Reduzido de 32 para 8 (economiza memória)
 def _load_booking_cached(hash_key: str, xlsx_bytes: bytes,
                          selected_ym_tuple: tuple, selected_emb_tuple: tuple) -> pd.DataFrame:
     """Versão cacheável do load_booking_df"""
@@ -439,7 +442,7 @@ def load_booking_df(xlsx_bytes: bytes,
     sheets = parse_excel_bytes(xlsx_bytes)
     df_all = pd.concat(sheets.values(), ignore_index=True)
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=16)  # OTIMIZADO: Reduzido de 64 para 16 (economiza memória)
 def _load_multi_cached(hash_key: str,
                        xlsx_bytes: bytes,
                        selected_ym_tuple: tuple,
@@ -447,7 +450,7 @@ def _load_multi_cached(hash_key: str,
     # Repassa como listas para a função real
     return load_multi_df(xlsx_bytes, list(selected_ym_tuple), list(selected_emb_tuple))
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=16)  # OTIMIZADO: Reduzido de 64 para 16 (economiza memória)
 def _load_transp_cached(hash_key: str,
                         xlsx_bytes: bytes,
                         selected_ym_tuple: tuple,
@@ -1589,6 +1592,11 @@ async def api_generate_email(payload: dict):
     kpis = compute_kpis(booking_concat, multi_concat, transp_concat)
     txt, html = build_email_v2(kpis, yms, embarcadores, booking_concat, transp_concat, multi_concat)
 
+    # OTIMIZADO: Liberar memória dos DataFrames
+    del booking_frames, multi_frames, transp_frames
+    del booking_concat, multi_concat, transp_concat
+    gc.collect()
+
     return JSONResponse({"status": "ok", "email": txt, "email_html": html})
 
 @app.post("/api/generate-eml-by")
@@ -1611,6 +1619,11 @@ async def api_generate_eml_by(payload: dict):
 
     kpis = compute_kpis(booking_concat, multi_concat, transp_concat)
     txt, html = build_email_v2(kpis, yms, embarcadores, booking_concat, transp_concat, multi_concat)
+
+    # OTIMIZADO: Liberar memória dos DataFrames antes de gerar EML
+    del booking_frames, multi_frames, transp_frames
+    del booking_concat, multi_concat, transp_concat
+    gc.collect()
 
     emb_label = ", ".join(embarcadores)
     subject = f"Diário Operacional – {format_periodos_label(yms)} – {emb_label}"
@@ -1713,6 +1726,8 @@ def api_flush(client: str = Query(..., description="Identificador do bucket/clie
 
     # Limpar cache
     cache.clear()
+    kpi_cache.clear()  # OTIMIZADO: Também limpar kpi_cache
+    gc.collect()  # OTIMIZADO: Liberar memória
 
     return JSONResponse({"status": "ok", "deleted": int(deleted), "detail": detail})
 
@@ -1729,7 +1744,9 @@ def health():
     return {"ok": True, "db_ok": bool(db_ok), "cache_size": len(cache)}
 
 @app.get("/api/clear-cache")
-def clear_cache():
+def clear_cache_endpoint():  # OTIMIZADO: Renomeado para evitar conflito com variável
     """Endpoint para limpar cache manualmente"""
     cache.clear()
+    kpi_cache.clear()  # OTIMIZADO: Também limpar kpi_cache
+    gc.collect()  # OTIMIZADO: Liberar memória
     return {"status": "ok", "message": "Cache limpo com sucesso"}
