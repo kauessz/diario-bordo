@@ -9,139 +9,110 @@ export type SummaryKpis = {
 };
 
 /**
- * Resolve a URL base da API de forma inteligente
- * Prioridade:
- * 1) window.__ENV__.API_BASE_URL (runtime, sem rebuild)
- * 2) VITE_API_BASE
- * 3) VITE_API_BASE_URL
- * 4) localhost (dev)
- * 5) fallback Koyeb (prod)
+ * Resolve a URL base da API
+ * CONFIGURAÇÃO PARA DESENVOLVIMENTO LOCAL:
+ * - Se estiver rodando localmente (localhost/127.0.0.1), usa backend local
+ * - Se estiver em produção (Netlify), usa variável de ambiente ou fallback
  */
 function resolveApiBase(): string {
-  const runtime = (window as any)?.__ENV__?.API_BASE_URL;
-  if (runtime && String(runtime).trim()) {
-    return String(runtime).trim().replace(/\/+$/, "");
-  }
-
+  // 1. Verificar variável de ambiente (prioritário)
   const fromEnv = (import.meta as any)?.env?.VITE_API_BASE;
   if (fromEnv && String(fromEnv).trim()) {
-    return String(fromEnv).trim().replace(/\/+$/, "");
+    return String(fromEnv).trim().replace(/\/$/, "");
   }
 
-  const fromEnv2 = (import.meta as any)?.env?.VITE_API_BASE_URL;
-  if (fromEnv2 && String(fromEnv2).trim()) {
-    return String(fromEnv2).trim().replace(/\/+$/, "");
-  }
-
-  // fallback só para dev local
+  // 2. Detectar ambiente
   if (typeof window !== "undefined") {
     const { hostname, port } = window.location;
-    const isDev =
-      port === "5173" || port === "5174" || port === "3000" || hostname === "localhost";
-    if (isDev) return "http://127.0.0.1:8000";
+    
+    // Se estiver rodando em localhost/127.0.0.1, usar backend local
+    const isLocalDev =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      port === "5173" ||
+      port === "5174" ||
+      port === "3000";
+
+    if (isLocalDev) {
+      console.log("[API Client] Modo de desenvolvimento local detectado");
+      return "http://127.0.0.1:8000"; // Backend local
+    }
   }
 
-  // produção (Fly.io - Diário Operacional)
-  return "https://diario-bordo-api-kaue.fly.dev";
+  // 3. Produção (Netlify) - usar variável de ambiente ou configuração
+  console.log("[API Client] Modo de produção detectado");
+  return "https://devisable-fissirostral-rylee.ngrok-free.dev"; // ⚠️ SUBSTITUA pela URL do seu backend em produção
 }
 
 const API_BASE = resolveApiBase();
-const DEFAULT_TIMEOUT = Number((import.meta as any)?.env?.VITE_API_TIMEOUT_MS ?? 120000);
+console.log(`[API Client] Base URL configurada: ${API_BASE}`);
 
-console.log(`[API Client] Base URL: ${API_BASE}`);
-
-/** Monta URL com segurança (sem // duplicado) */
-function buildUrl(path: string, query?: Record<string, string | number | boolean>) {
-  const clean = String(path || "").replace(/^\/+/, "");
-  const u = new URL(clean, API_BASE + "/");
-  if (query) {
-    for (const [k, v] of Object.entries(query)) {
-      if (v !== undefined && v !== null) u.searchParams.set(k, String(v));
-    }
+/** Monta URL com query params */
+function buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>) {
+  const base = API_BASE.replace(/\/+$/, "");
+  const p = path.startsWith("/") ? path : `/${path}`;
+  const url = new URL(base + p);
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v === undefined || v === null) return;
+      url.searchParams.set(k, String(v));
+    });
   }
-  return u.toString();
+  return url.toString();
 }
 
-/**
- * Helper para verificar resposta HTTP e lançar erro descritivo
- */
+/** Verifica resposta HTTP */
 async function ensureOk(res: Response): Promise<void> {
   if (!res.ok) {
-    let errorMessage = `HTTP ${res.status} - ${res.statusText}`;
+    let msg = `HTTP ${res.status} - ${res.statusText}`;
     try {
-      const ct = res.headers.get("content-type") || "";
-      if (ct.includes("application/json")) {
-        const errorData = await res.json().catch(() => null);
-        if (errorData?.detail) errorMessage += `: ${errorData.detail}`;
-        else if (errorData?.error) errorMessage += `: ${errorData.error}`;
-      } else {
-        const txt = await res.text().catch(() => "");
-        if (txt) errorMessage += `: ${txt.slice(0, 300)}`;
-      }
+      const data = await res.json();
+      if ((data as any)?.detail) msg += `: ${(data as any).detail}`;
     } catch {}
-    throw new Error(errorMessage);
+    throw new Error(msg);
   }
 }
 
-/**
- * Wrapper fetch com timeout
- */
+/** fetch com timeout */
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
-  timeout: number = DEFAULT_TIMEOUT
+  timeout = 60000
 ): Promise<Response> {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(new Error(`timeout:${timeout}`)), timeout);
+  const id = setTimeout(() => controller.abort(), timeout);
   try {
-    const res = await fetch(url, {
-      cache: "no-store",
-      ...options,
-      signal: controller.signal,
-    });
+    const res = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(id);
     return res;
-  } catch (error: any) {
+  } catch (err: any) {
     clearTimeout(id);
-    if (error?.name === "AbortError" || String(error?.message || "").startsWith("timeout:")) {
+    if (err?.name === "AbortError") {
       throw new Error("Request timeout - servidor demorou muito para responder");
     }
-    throw error instanceof Error ? error : new Error("Erro desconhecido na requisição");
+    throw err instanceof Error ? err : new Error("Erro desconhecido na requisição");
   }
 }
 
-/**
- * Upload de arquivos para processamento
- */
+/** Upload de arquivos */
 export async function uploadFiles(
   client: string,
   bookingFile: File,
   multiFile: File,
   transpFile: File
-): Promise<{
-  periods: string[];
-  embarcadores: string[];
-  inserted?: any[];
-  skipped?: any[];
-}> {
+): Promise<{ periods: string[]; embarcadores: string[]; inserted?: any[]; skipped?: any[] }> {
   const form = new FormData();
   form.append("client", client);
   form.append("booking", bookingFile);
   form.append("multimodal", multiFile);
   form.append("transportes", transpFile);
 
-  const res = await fetchWithTimeout(
-    buildUrl("/api/upload"),
-    { method: "POST", body: form },
-    120000 // 2 min
-  );
+  const res = await fetchWithTimeout(buildUrl("/api/upload"), { method: "POST", body: form }, 120000);
   await ensureOk(res);
   return res.json();
 }
 
-/**
- * Buscar resumo/KPIs por período e embarcadores
- */
+/** Buscar resumo/KPIs */
 export async function getSummaryBy(
   client: string,
   yms: string[],
@@ -160,9 +131,7 @@ export async function getSummaryBy(
   return res.json();
 }
 
-/**
- * Gerar email com análise de IA
- */
+/** Gerar email com IA */
 export async function generateEmailBy(payload: {
   client: string;
   yms: string[];
@@ -170,20 +139,14 @@ export async function generateEmailBy(payload: {
 }): Promise<{ email: string; email_html: string }> {
   const res = await fetchWithTimeout(
     buildUrl("/api/generate-email"),
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
     90000
   );
   await ensureOk(res);
   return res.json();
 }
 
-/**
- * Gerar arquivo .EML para download
- */
+/** Gerar .EML */
 export async function generateEmlBy(payload: {
   client: string;
   yms: string[];
@@ -191,56 +154,35 @@ export async function generateEmlBy(payload: {
 }): Promise<{ filename: string; file_b64: string }> {
   const res = await fetchWithTimeout(
     buildUrl("/api/generate-eml-by"),
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
     90000
   );
   await ensureOk(res);
   return res.json();
 }
 
-/**
- * Buscar dados disponíveis no banco (períodos e embarcadores)
- * Para auto-carregar ao abrir a aplicação
- */
+/** Dados disponíveis (períodos/embarcadores) */
 export async function getAvailableData(
   client: string
-): Promise<{
-  has_data: boolean;
-  periods: string[];
-  embarcadores: string[];
-  error?: string;
-}> {
-  const res = await fetchWithTimeout(
-    buildUrl("/api/available-data", { client }),
-    {},
-    60000 // ↑ 60s (estava curto e estava estourando)
-  );
+): Promise<{ has_data: boolean; periods: string[]; embarcadores: string[]; error?: string }> {
+  const res = await fetchWithTimeout(buildUrl("/api/available-data", { client }), {}, 60000);
   await ensureOk(res);
   return res.json();
 }
 
-/**
- * Limpar banco de dados (flush)
- */
+/** Flush */
 export async function clearDatabase(
   client: string,
   ym?: string
 ): Promise<{ status: string; deleted: number; detail: any }> {
-  const res = await fetchWithTimeout(
-    buildUrl("/api/flush", { client, ...(ym ? { ym } : {}) }),
-    { method: "DELETE" }
-  );
+  const res = await fetchWithTimeout(buildUrl("/api/flush", { client, ...(ym ? { ym } : {}) }), {
+    method: "DELETE",
+  });
   await ensureOk(res);
   return res.json();
 }
 
-/**
- * Health check - verificar se API está online
- */
+/** Health */
 export async function healthCheck(): Promise<{ ok: boolean; cache_size?: number }> {
   try {
     const res = await fetchWithTimeout(buildUrl("/api/health"), {}, 5000);

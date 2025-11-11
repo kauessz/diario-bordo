@@ -268,6 +268,13 @@ def test_summary_with_data(client, sample_booking_excel, sample_multimodal_excel
     assert "kpis" in data
     assert "debug" in data
 
+def test_concat_safely_handles_none():
+    import pandas as pd
+    from backend.app import _concat_safely
+    df = _concat_safely([None, None])
+    assert isinstance(df, pd.DataFrame)
+    assert df.empty
+
 
 # =============================================================================
 # TESTES - FLUSH
