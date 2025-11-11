@@ -71,7 +71,13 @@ async function ensureOk(res: Response): Promise<void> {
     } catch {}
     throw new Error(msg);
   }
+
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    throw new Error(`Resposta inesperada do servidor (Content-Type=${ct}). Possível aviso do ngrok.`);
+  }
 }
+
 
 /** fetch com timeout */
 async function fetchWithTimeout(
@@ -82,7 +88,9 @@ async function fetchWithTimeout(
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
+    const headers = new Headers((options && (options as any).headers) || {});
+    if (!headers.has("ngrok-skip-browser-warning")) headers.set("ngrok-skip-browser-warning", "true");
+    const res = await fetch(url, { ...options, headers, signal: controller.signal });
     clearTimeout(id);
     return res;
   } catch (err: any) {
